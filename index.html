@@ -160,7 +160,7 @@ footer b{color:#c9ccd0}
  <section class="col left">
   <div class="card">
    <div class="ttl"><span>SYSTEMS READOUT · 24H</span><button class="allbtn on" id="allbtn">ALL LAYERS</button></div>
-   <div class="comp"><div class="big mono" id="cval">—</div><div class="lbl"><b>Composite stress <span class="tier" id="ctier"></span></b><span id="csub">0–100 across all 8 layers. Higher = worse.</span></div></div>
+   <div class="comp"><div class="big mono" id="cval">—</div><div class="lbl"><b>Composite stress <span class="tier" id="ctier"></span></b><span id="csub">0–100 vs the past 3 years. 50 = a typical day; higher = worse.</span></div></div>
    <div class="fear" id="fear" style="display:none"></div>
    <div id="rows"></div>
   </div>
@@ -263,7 +263,7 @@ function spark(c,vals,col){const x=c.getContext('2d'),r=devicePixelRatio||1;c.wi
 function render(){status();$('#empty').style.display=D?'none':'flex';
  // composite
  $('#cval').textContent=D?D.composite:'—';
- if(D&&HIST.length>1){const ref=[...HIST].reverse().find(h=>Date.parse(D.updated)-Date.parse(h.t)>=20*36e5);if(ref){const pc=Math.round(Object.values(ref.idx).reduce((a,b)=>a+b,0)/Object.keys(ref.idx).length),dd=D.composite-pc;$('#csub').innerHTML=`<span class="${dd>=3?'WORSE':dd<=-3?'BETTER':'STEADY'}" style="font-weight:700">${dd>0?'▲ +':dd<0?'▼ ':''}${dd} vs 24h ago</span> · 0–100, higher = worse`}}
+ if(D&&HIST.length>1){const ref=[...HIST].filter(h=>h.v===2).reverse().find(h=>Date.parse(D.updated)-Date.parse(h.t)>=20*36e5);if(ref){const pc=Math.round(Object.values(ref.idx).reduce((a,b)=>a+b,0)/Object.keys(ref.idx).length),dd=D.composite-pc;$('#csub').innerHTML=`<span class="${dd>=3?'WORSE':dd<=-3?'BETTER':'STEADY'}" style="font-weight:700">${dd>0?'▲ +':dd<0?'▼ ':''}${dd} vs 24h ago</span> · 50 = a typical day`}}
  // rows
  const rowH=l=>{const L=D&&D.layers[l.id]||{};const tr=L.trend||'—',dl=L.delta;
   const sub=L.note||(L.surgePct!=null?`coverage ${L.surgePct>=0?'+':''}${L.surgePct}% vs 7d · tone ${L.tone24??'—'}`:L.articles!=null?`${L.articles} headlines (24h) · tone ${L.tone24??'—'}`:'awaiting data');
@@ -272,7 +272,7 @@ function render(){status();$('#empty').style.display=D?'none':'flex';
  $('#ctier').textContent=D?(D.compositeTier||tierOf(D.composite)):'';$('#ctier').className='tier T-'+(D?(D.compositeTier||tierOf(D.composite)):'');
  const F=D&&D.fear;$('#fear').style.display=F?'flex':'none';
  if(F){const cd=D.layers?Object.values(D.layers).reduce((a,l)=>a+(l.delta||0),0)/8:0,ag=F.z>=.75&&cd>=2?'Markets agree with the headlines.':F.z<=-.5&&cd>=2?'Headlines up, markets calm: possibly noise.':F.z>=.75&&cd<=0?'Markets uneasy while headlines are quiet: watch.':'No clear disagreement.';
-  $('#fear').innerHTML=`<b>${F.value}</b><span>MARKET FEAR · ${F.z>=0?'▲ +':'▼ '}${F.z.toFixed(1)}σ over 5d (VIX, gold, dollar)<br>${ag}</span>`}
+  $('#fear').innerHTML=`<b>${F.value}</b><span>MARKET FEAR · ${F.z>=0?'▲ +':'▼ '}${F.z.toFixed(1)}σ over 5d (VIX, gold, dollar)${D.marketsStale?` · <span style="color:var(--text-muted)">markets closed, as of ${new Date(D.marketsAsOf+'T12:00:00Z').toLocaleDateString('en-US',{weekday:'short',timeZone:'UTC'})} close</span>`:''}<br>${ag}</span>`}
  document.querySelectorAll('#rows canvas').forEach(c=>spark(c,HIST.slice(-36).map(h=>h.idx[c.dataset.s]).filter(v=>v!=null),COL[c.dataset.s]));
  document.querySelectorAll('.row').forEach(r=>r.onclick=()=>toggle(r.dataset.l));
  // macro
@@ -292,16 +292,16 @@ function render(){status();$('#empty').style.display=D?'none':'flex';
  // sources
  const SS=D&&D.sources||{},st=k=>k in SS?(SS[k]?'ok':'no'):'',li=(n,d,k)=>`<li><i class="${k?st(k):''}"></i><div>${n}${d?` <span>· ${d}</span>`:''}</div></li>`;
  const NEWS=LAY.map(l=>li(`Google News · ${l.n}`,'',`news_${l.id}`)).join('');
- const MK=(D&&D.macro||[]).map(m=>li(m.name,m.last!=null?'daily close, 1-year history':'unavailable this pull','markets')).join('');
+ const MK=(D&&D.macro||[]).map(m=>li(m.name,m.last!=null?'daily close, 5-year history':'unavailable this pull','markets')).join('');
  const SRC=[
   ['$ MONEY','#0f766e',MK+li('Market fear gauge','VIX + gold + dollar, 5-day moves vs 1 year','markets')],
-  ['§ LAW','#1d4ed8',[['Treasury · Office of Foreign Assets Control','sanctions'],['Commerce · Bureau of Industry & Security','export controls'],['State Department','arms, sanctions'],['Defense Department',''],['Federal Energy Regulatory Commission',''],['Energy Department',''],['Federal Maritime Commission',''],['Maritime Administration',''],['Agriculture Department','food programs'],['Army Corps of Engineers','water'],['Bureau of Reclamation','water'],['Federal Communications Commission',''],['NTIA','telecom'],['All agencies','cybersecurity rules']].map(([n,d])=>li(n,d,'federal_register')).join('')],
-  ['◉ DATA','#0284c7',[['IMF PortWatch','daily ship transits, 28 chokepoints, since 2019','portwatch'],['SANS ISC DShield','scanning of 5 industrial-control ports','dshield'],['IODA (Georgia Tech)','live internet outages by country','ioda'],['IODA history','yearly outage counts since 2019','ioda_history'],['GDACS (UN / EU)','disaster & drought alerts','gdacs'],['GDACS archive','Orange/Red droughts since 2019','gdacs_archive'],['CISA ICS advisories','industrial-control vulnerabilities','cisa_ics'],['CISA Known Exploited Vulnerabilities','actively exploited flaws','cisa_kev']].map(([n,d,k])=>li(n,d,k)).join('')],
+  ['§ LAW','#1d4ed8',[['Treasury · Office of Foreign Assets Control','sanctions'],['Commerce · Bureau of Industry & Security','export controls'],['State Department','arms, sanctions'],['Defense Department',''],['Federal Energy Regulatory Commission',''],['Energy Department',''],['Federal Maritime Commission',''],['Maritime Administration',''],['Agriculture Department','food programs'],['Army Corps of Engineers','water'],['Bureau of Reclamation','water'],['Federal Communications Commission',''],['NTIA','telecom'],['All agencies','cybersecurity rules']].map(([n,d])=>li(n,d,'federal_register')).join('')+li('Federal Register weekly history','every agency above, since 2019','law_history')],
+  ['◉ DATA','#0284c7',[['IMF PortWatch','daily ship transits, 28 chokepoints, since 2019','portwatch'],['SANS ISC DShield','scanning of 5 industrial-control ports, since 2019','dshield'],['IODA (Georgia Tech)','live internet outages by country','ioda'],['IODA history','yearly outage counts since 2019','ioda_history'],['GDACS (UN / EU)','disaster & drought alerts','gdacs'],['GDACS archive','Orange/Red droughts, floods & cyclones since 2019','gdacs_archive'],['CISA ICS advisories','industrial-control vulnerabilities','cisa_ics'],['CISA Known Exploited Vulnerabilities','actively exploited flaws','cisa_kev']].map(([n,d,k])=>li(n,d,k)).join('')],
   ['NEWS','#86868b',NEWS+li('GDELT Project','global event volume (when available)','gdelt')],
   ['NARRATIVE BLOCS','#7c3aed',[['Western wires','Reuters, AP, BBC'],['Russian state media','RT, TASS, Sputnik'],['Chinese state media','Global Times, CGTN, Xinhua, China Daily'],['Gulf / Arab media','Al Jazeera, Arab News, The National'],['Indian media','The Hindu, Times of India, NDTV, Hindustan Times'],['Iranian state media','Press TV, Tehran Times']].map(([n,d])=>li(n,d,'news_narrative')).join('')],
   ['MAP','#a1a1a6',li('Natural Earth land outlines','public domain','')]];
  const cnt=(SRC.map(x=>x[2]).join('').match(/<li>/g)||[]).length,ks=Object.keys(SS),on=ks.filter(k=>SS[k]).length;
- $('#srcl').innerHTML=`<div class="tot">${cnt} sources across money, law, news and measured data, all free and public. Checked every 4 hours.${ks.length?`<br>${on} of ${ks.length} feeds answered on the last pull.`:''}</div>`+SRC.map(([h,c,b])=>`<h4 style="color:${c}">${h}</h4><ul>${b}</ul>`).join('');
+ $('#srcl').innerHTML=`<div class="tot">${cnt} sources across money, law, news and measured data, all free and public. Checked every 4 hours. Every score is ranked against its own history back to 2019 (markets: 5 years); tiers come from replaying the past year: Elevated = worst 25% of days, High = worst 8%, Critical = worst 2%.${ks.length?`<br>${on} of ${ks.length} feeds answered on the last pull.`:''}</div>`+SRC.map(([h,c,b])=>`<h4 style="color:${c}">${h}</h4><ul>${b}</ul>`).join('');
  $('#srcn').textContent=ks.length?on+'/'+ks.length+' FEEDS ONLINE':'';
 }
 
@@ -393,7 +393,7 @@ cv.addEventListener('pointermove',e=>{if(!ptrs.has(e.pointerId))return;ptrs.set(
  if(ptrs.size>=2){const p=[...ptrs.values()];zoom=Math.max(.7,Math.min(3.5,z0*Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)/pinch0));return}
  if(drag){const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.mv+=Math.abs(dx)+Math.abs(dy);rotY+=dx*.006/zoom;rotX=Math.max(-1.4,Math.min(1.4,rotX+dy*.006/zoom));drag.x=e.clientX;drag.y=e.clientY;spin=false}});
 function up(e){ptrs.delete(e.pointerId);if(drag&&drag.mv<6&&ptrs.size===0){const b=cv.getBoundingClientRect(),x=e.clientX-b.left,y=e.clientY-b.top;let best=null,bd=1e9;for(const h of hits){const d=Math.hypot(h.x-x,h.y-y)-(h.int?6:0);if(d<h.r&&d<bd){bd=d;best=h}}
-  if(best&&best.int){openPop({name:best.int.name,lat:best.int.lat,lon:best.int.lon,stack:best.int})}else if(best){const same=hits.filter(h=>h.h.name===best.h.name).map(h=>h.h);openPop({name:best.h.name,lat:best.h.lat,lon:best.h.lon,items:same})}else closePop()}
+  if(best&&best.int){openPop({name:best.int.name,lat:best.int.lat,lon:best.int.lon,stack:best.int})}else if(best){const same=hits.filter(h=>h.h&&h.h.name===best.h.name).map(h=>h.h);openPop({name:best.h.name,lat:best.h.lat,lon:best.h.lon,items:same})}else closePop()}
  if(ptrs.size===0)drag=null}
 cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
 cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.7,Math.min(3.5,zoom*Math.exp(-e.deltaY*.0015)))},{passive:false});

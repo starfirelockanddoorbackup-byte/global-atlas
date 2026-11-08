@@ -161,7 +161,7 @@ const histPath = new URL('../data/history.json', import.meta.url);
 let history = []; try { history = JSON.parse(await fs.readFile(histPath)); } catch {}
 log('backfill + law');
 const B = await backfill(get, log, now);
-sources.portwatch = !!B.portwatch; sources.dshield = !!B.dshield; sources.gdacs_archive = !!B.gdacs; sources.ioda_history = !!B.ioda;
+sources.portwatch = !!B.portwatch; sources.dshield = !!B.dshield2; sources.gdacs_archive = !!B.gdacs; sources.ioda_history = !!B.ioda;
 const LAW = await law(get, now); sources.federal_register = Object.values(LAW).some(l => l.latest.length);
 const H = hardSignals(B, now, { outageEvents: outages ? outages.events : null });
 const money = {}; for (const L of LAYERS) money[L.id] = moneySignal(L.id, mkts);
@@ -261,6 +261,10 @@ for (const [id, L] of Object.entries(layers)) {
 // signal chain
 const spread = layers.narrative.divergence ? layers.narrative.divergence.spread : null;
 const nh = narrativeHard(history, spread); if (nh) H.narrative = nh;
+// measured data at a multi-year extreme counts as "up" even if it eased slightly vs a month ago
+for (const [id, L] of Object.entries(layers)) { const dp = L.parts.data; if (dp == null || !H[id] || !CAL.parts[id]?.data) continue;
+  if (dp >= .85 && H[id].dir !== 1) { H[id].dir = 1; H[id].txt += ` · worse than ${Math.round(dp * 100)}% of days since 2019`; }
+  else if (dp <= .15 && H[id].dir !== -1) { H[id].dir = -1; H[id].txt += ` · calmer than ${Math.round((1 - dp) * 100)}% of days since 2019`; } }
 const signal = signalCheck(layers, money, LAW, H), fear = fearGauge(mkts);
 for (const [id, L] of Object.entries(layers)) { L.tier = tierBy(L.index, CAL.thr[id]); L.thr = CAL.thr[id] || null; }
 let prev = null; try { prev = JSON.parse(await fs.readFile(new URL('../data/latest.json', import.meta.url))); } catch {}
