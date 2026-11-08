@@ -135,8 +135,8 @@ export async function buildArc(now, B, CENT, log) {
   for (const e of B.gdacs || []) { const z = zone(e.name, 'water', e.lat, e.lon), lv = e.level === 'Red' ? 9 : 6; z.src.add('gdacs');
     for (let t = Math.max(e.from, Date.parse(ARC_FROM + '-01')); t <= Math.min(e.to || +now, +now); t += DAY) mark(z, t, lv); }
   // 4) IODA yearly outage counts → months of that year
-  if (B.ioda) { const all = Object.values(B.ioda).flatMap(y => Object.values(y)).sort((a, b) => a - b), p90 = all[Math.floor(all.length * .9)] || 50;
-    for (const [y, cs] of Object.entries(B.ioda)) for (const [name, n] of Object.entries(cs)) { if (n < 10 || !CENT[name]) continue;
+  if (B.ioda) { const all = Object.values(B.ioda).flatMap(y => Object.values(y)).sort((a, b) => a - b), p90 = all[Math.floor(all.length * .9)] || 50, p75 = all[Math.floor(all.length * .75)] || 10;
+    for (const [y, cs] of Object.entries(B.ioda)) for (const [name, n] of Object.entries(cs)) { if (n < Math.max(10, p75) || !CENT[name]) continue;
       const lv = clamp(Math.ceil(n / p90 * 9), 1, 9), z = zone(name, 'telecom', CENT[name][0], CENT[name][1]); z.src.add('ioda');
       months.forEach((m, i) => { if (m.startsWith(y + '-')) z.m[i] = Math.max(z.m[i], lv); }); } }
   const enc = a => Array.from(a, v => v).join('');
@@ -192,7 +192,7 @@ export async function law(get, now) {
     for (const u of [q(ag), term ? q(null, term) : null].filter(Boolean)) { const j = await get(u, { wait: 400 }); for (const d of j?.results || []) docs[d.html_url] = d; }
     const all = Object.values(docs); if (!all.length && !Object.keys(docs).length) { out[id] = { n7: 0, base: 0, dir: 0, latest: [] }; continue; }
     const t = d => Date.parse(d.publication_date), n7 = all.filter(d => +now - t(d) < 7 * DAY).length, base = all.filter(d => +now - t(d) >= 7 * DAY).length / 13;
-    out[id] = { n7, base: +base.toFixed(1), dir: n7 >= Math.max(2, base * 1.8) ? 1 : base >= 2 && n7 <= base * .3 ? -1 : 0,
+    out[id] = { n7, base: +base.toFixed(1), dir: n7 >= Math.max(2, base * 1.8) ? 1 : 0,
       latest: all.sort((a, b) => t(b) - t(a)).slice(0, 3).map(d => ({ title: d.title, url: d.html_url, t: d.publication_date, type: d.type })) };
   }
   return out;
@@ -223,7 +223,7 @@ export function hardSignals(B, now, cur) {
       H.cyber = { v: Math.round(r7), z: +z.toFixed(2), dir: z >= 1.5 ? 1 : z <= -1.5 ? -1 : 0, v01: clamp(.5 + z / 4, 0, 1), txt: `ICS-port scanners (Modbus, S7, DNP3, EtherNet/IP, BACnet): ${Math.round(r7).toLocaleString()}/day, ${z >= 0 ? '+' : ''}${z.toFixed(1)}σ vs 90d`, src: "SANS ISC DShield", spark: v.slice(-90).map(Math.round) }; } }
   if (cur.outageEvents != null && B.ioda) { const Y = new Date(now).getUTCFullYear(), ly = B.ioda[Y - 1]; if (ly) { const base = Object.values(ly).reduce((a, b) => a + b, 0) / 365, r = cur.outageEvents / (base || 1);
     const s = { v: cur.outageEvents, ref: +base.toFixed(1), dir: r >= 1.4 ? 1 : r <= .6 ? -1 : 0, v01: clamp(r / 2, 0, 1), txt: `${cur.outageEvents} internet outage events (24h) vs ${base.toFixed(0)}/day normal (${Y - 1})`, src: 'IODA' }; H.telecom = s; H.power = { ...s }; } }
-  if (B.gdacs) { const active = t => B.gdacs.filter(e => e.from <= t && (e.to || +now) >= t).length, nowN = active(+now), yr = []; for (let i = 7; i < 365; i += 7) yr.push(active(+now - i * DAY));
+  if (B.gdacs) { const active = t => B.gdacs.filter(e => e.from <= t && (e.to || +now) >= t - 10 * DAY).length, nowN = active(+now), yr = []; for (let i = 7; i < 365; i += 7) yr.push(active(+now - i * DAY));
     const m = mean(yr); H.water = { v: nowN, ref: +m.toFixed(1), dir: nowN >= m * 1.3 + .5 ? 1 : nowN <= m * .7 - .5 ? -1 : 0, v01: clamp(nowN / Math.max(1, m * 2), 0, 1), txt: `${nowN} Orange/Red drought alerts active vs ${m.toFixed(1)} avg over the past year`, src: 'GDACS' }; }
   return H;
 }
