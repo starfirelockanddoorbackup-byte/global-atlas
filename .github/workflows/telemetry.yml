@@ -4,7 +4,7 @@ on:
     - cron: '17 */4 * * *'   # every 4 hours
   workflow_dispatch: {}
   push:
-    paths: ['scripts/**', '.github/workflows/telemetry.yml']
+    paths: ['scripts/update.mjs', 'scripts/extra.mjs', '.github/workflows/telemetry.yml']
 permissions:
   contents: write
 concurrency: { group: telemetry, cancel-in-progress: false }
