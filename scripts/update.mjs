@@ -2,7 +2,8 @@
 // Pulls open-source signals, scores 8 stress layers, finds regions where layers stack up,
 // and writes data/latest.json + data/history.json for the static site.
 import fs from 'node:fs/promises';
-import { backfill, archiveDay, buildArc, markets, law, hardSignals, narrativeHard, moneySignal, scoreLayer, signalCheck, fearGauge, tier } from './extra.mjs';
+import { marketHistory, liveMarkets, lawWeekly, rawSeries, calibrate, tierBy, pct } from './calib.mjs';
+import { backfill, archiveDay, buildArc, law, hardSignals, narrativeHard, moneySignal, scoreLayer, signalCheck, fearGauge, tier } from './extra.mjs';
 
 const UA = 'GlobalAtlas/1.0 (+https://github.com/starfirelockanddoorbackup-byte/global-atlas)';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -151,7 +152,8 @@ async function gdacs() {
 }
 /* ---------------- run ---------------- */
 log('GLOBAL ATLAS telemetry pull');
-const [ics, kev, outages, disasters, mkts] = [await cisaICS(), await cisaKEV(), await ioda(), await gdacs(), await markets(get)];
+const [ics, kev, outages, disasters, MH] = [await cisaICS(), await cisaKEV(), await ioda(), await gdacs(), await marketHistory(get)];
+const mkts = liveMarkets(MH);
 sources.cisa_ics = !!ics; sources.cisa_kev = !!kev; sources.ioda = !!outages; sources.gdacs = !!disasters; sources.markets = mkts.some(m => m.last != null);
 log('structured', JSON.stringify(sources));
 
@@ -163,7 +165,19 @@ sources.portwatch = !!B.portwatch; sources.dshield = !!B.dshield; sources.gdacs_
 const LAW = await law(get, now); sources.federal_register = Object.values(LAW).some(l => l.latest.length);
 const H = hardSignals(B, now, { outageEvents: outages ? outages.events : null });
 const money = {}; for (const L of LAYERS) money[L.id] = moneySignal(L.id, mkts);
-const lawV = id => LAW[id] ? clamp(.5 + (LAW[id].n7 / Math.max(1, LAW[id].base) - 1) / 3, 0, 1) : null;
+// calibration: every hard component as a percentile of its own ~3-year history; tiers from a replay of the past year
+log('calibrate');
+const LW = await lawWeekly(get); sources.law_history = Object.keys(LW).length > 0;
+const RS = rawSeries(now, MH, LW, B), TODAY = {};
+for (const L of LAYERS) { const c = RS.S[L.id] || {}, t = {};
+  for (const k of Object.keys(c)) t[k] = c[k][c[k].length - 1];
+  if (LAW[L.id]) t.law = (LAW[L.id].n7 + 1) / (LAW[L.id].base + 1);
+  TODAY[L.id] = t; }
+const CAL = calibrate(now, RS, TODAY);
+const mAsOf = mkts.map(m => m.asOf).filter(Boolean).sort().pop(), mStale = mAsOf ? (+now - Date.parse(mAsOf + 'T21:00:00Z')) > 30 * 36e5 : false;
+if (mStale) for (const id of Object.keys(money)) if (money[id]) money[id].txt += ` (as of ${new Date(mAsOf + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })} close)`;
+const lawV = id => CAL.parts[id]?.law ?? (LAW[id] ? clamp(.5 + (LAW[id].n7 / Math.max(1, LAW[id].base) - 1) / 3, 0, 1) : null);
+log('  thresholds', JSON.stringify(CAL.thr), 'composite', JSON.stringify(CAL.thrComp));
 const layers = {}, hotspots = [], counts = {};
 for (const L of LAYERS) {
   log('layer', L.id);
@@ -183,8 +197,15 @@ for (const L of LAYERS) {
   if (L.id === 'cyber' && H.cyber) struct = Math.max(struct, H.cyber.v01);
   if (L.id === 'maritime' && H.maritime) { struct = H.maritime.v01; note = H.maritime.txt; }
   if (L.id === 'strain' && money.strain) note = money.strain.txt;
+  if (L.id === 'water' && H.water) note = H.water.txt;
   const hasData = ['cyber', 'telecom', 'power', 'water', 'maritime'].includes(L.id) && (struct || H[L.id]);
-  const parts = { news: .55 * surge + .45 * neg, money: money[L.id]?.v01 ?? null, law: lawV(L.id), data: hasData ? struct : null };
+  // data: percentile of history where we have it (maritime, cyber, water, power-cyclones); live ratios otherwise
+  let data = hasData ? struct : null; const cd = CAL.parts[L.id]?.data;
+  if (cd != null) data = L.id === 'power' ? Math.max(cd, H.power?.v01 ?? 0) : cd;
+  // news: percentile of this layer's own headline pressure across past pulls (neutral until ~2 days of history)
+  const newsRaw = .55 * surge + .45 * neg, pastNews = history.map(h => h.nv?.[L.id]).filter(v => v != null);
+  const news01 = pastNews.length >= 12 ? pct(newsRaw, pastNews) : .5;
+  const parts = { news: news01, money: CAL.parts[L.id]?.money ?? money[L.id]?.v01 ?? null, law: lawV(L.id), data };
   const index = scoreLayer(parts);
   // hotspots from geolocated headlines
   const byPlace = {};
@@ -196,7 +217,7 @@ for (const L of LAYERS) {
   const spots = Object.values(byPlace).sort((a, b) => b.n - a.n).slice(0, 14);
   const top = spots[0]?.n || 1;
   spots.forEach(s => { s.intensity = +(s.n / top).toFixed(2); hotspots.push(s); });
-  layers[L.id] = { index, parts: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, v == null ? null : +v.toFixed(2)])), volume24: g.vol24 ?? g.n24, volumeBase: g.volBase ? Math.round(g.volBase) : baseN ? Math.round(baseN) : null, surgePct: (g.volBase || baseN) ? Math.round((ratio - 1) * 100) : null,
+  layers[L.id] = { index, newsRaw: +newsRaw.toFixed(3), parts: Object.fromEntries(Object.entries(parts).map(([k, v]) => [k, v == null ? null : +v.toFixed(2)])), volume24: g.vol24 ?? g.n24, volumeBase: g.volBase ? Math.round(g.volBase) : baseN ? Math.round(baseN) : null, surgePct: (g.volBase || baseN) ? Math.round((ratio - 1) * 100) : null,
     tone24: g.tone24 != null ? +g.tone24.toFixed(2) : null, toneBase: g.toneBase != null ? +g.toneBase.toFixed(2) : null, note, articles: g.arts.length };
 }
 // structured hotspots
@@ -219,7 +240,8 @@ if (div.length < 2) { div.length = 0;
 if (div.length >= 2) {
   const tones = div.map(d => d.tone), spread = Math.max(...tones) - Math.min(...tones);
   const n = layers.narrative; n.divergence = { spread: +spread.toFixed(2), blocs: div };
-  n.parts.data = +clamp(spread / 2.5, 0, 1).toFixed(2); n.index = scoreLayer(n.parts);
+  const sps = history.map(h => h.spread).filter(v => v != null);
+  n.parts.data = +(sps.length >= 12 ? pct(spread, sps) : clamp(spread / 2.5, 0, 1)).toFixed(2); n.index = scoreLayer(n.parts);
   n.note = `Tone spread across ${div.length} media blocs: ${spread.toFixed(1)} pts`;
 }
 
@@ -230,7 +252,7 @@ const convergence = Object.values(byRegion).map(r => ({ ...r, count: Object.keys
   .sort((a, b) => b.count - a.count || b.n - a.n).slice(0, 10);
 
 // history + deltas
-const ref = [...history].reverse().find(h => now - Date.parse(h.t) >= 20 * 36e5) || history[0];
+const H2 = history.filter(h => h.v === 2), ref = [...H2].reverse().find(h => now - Date.parse(h.t) >= 20 * 36e5) || H2[0];
 for (const [id, L] of Object.entries(layers)) {
   const prev = ref?.idx?.[id];
   L.delta = prev != null ? L.index - prev : null;
@@ -240,7 +262,7 @@ for (const [id, L] of Object.entries(layers)) {
 const spread = layers.narrative.divergence ? layers.narrative.divergence.spread : null;
 const nh = narrativeHard(history, spread); if (nh) H.narrative = nh;
 const signal = signalCheck(layers, money, LAW, H), fear = fearGauge(mkts);
-for (const [id, L] of Object.entries(layers)) L.tier = tier(L.index);
+for (const [id, L] of Object.entries(layers)) { L.tier = tierBy(L.index, CAL.thr[id]); L.thr = CAL.thr[id] || null; }
 let prev = null; try { prev = JSON.parse(await fs.readFile(new URL('../data/latest.json', import.meta.url))); } catch {}
 const NM = { military: 'Military', maritime: 'Maritime & Supply', cyber: 'Cyber & ICS', narrative: 'Narrative', power: 'Power & Grid', strain: 'Subsistence & Strain', water: 'Water', telecom: 'Telecom & Subsea' };
 const EXPL = { 'MONEY MOVING FIRST': 'markets moving before the headlines', 'POLICY MOVING': 'new US rules/orders ahead of the headlines', 'DATA MOVING': 'measured data moving, headlines quiet',
@@ -248,7 +270,7 @@ const EXPL = { 'MONEY MOVING FIRST': 'markets moving before the headlines', 'POL
 const moves = [];
 if (prev && prev.layers) {
   const RANK = { WATCH: 0, ELEVATED: 1, HIGH: 2, CRITICAL: 3 };
-  for (const [id, L] of Object.entries(layers)) { const pt = prev.layers[id]?.tier || (prev.layers[id] ? tier(prev.layers[id].index) : null);
+  for (const [id, L] of Object.entries(layers)) { const pt = prev.calib ? prev.layers[id]?.tier : null; // no tier moves across the switch to calibrated tiers
     if (pt && pt !== L.tier) moves.push({ kind: 'tier', layer: id, dir: RANK[L.tier] > RANK[pt] ? 1 : -1, txt: `${NM[id]}: ${pt} → ${L.tier}` }); }
   for (const [id, S] of Object.entries(signal)) { const ps = prev.signal?.[id]?.read;
     if (ps !== S.read && EXPL[S.read]) moves.push({ kind: 'signal', layer: id, dir: ['CONTRADICTED', 'NARRATIVE ONLY'].includes(S.read) ? 0 : 1, txt: `${NM[id]}: ${S.read.toLowerCase()} (${EXPL[S.read]})` }); }
@@ -260,11 +282,11 @@ if (prev && prev.layers) {
 log('archive');
 await archiveDay(now, hotspots, layers, Math.round(Object.values(layers).reduce((s, l) => s + l.index, 0) / LAYERS.length));
 await fs.writeFile(new URL('../data/arc.json', import.meta.url), JSON.stringify(await buildArc(now, B, CENT, log)));
-history.push({ t: now.toISOString(), n: counts, spread, fear: fear?.value, chain: Object.fromEntries(Object.entries(signal).map(([k, v]) => [k, [money[k]?.z ?? null, LAW[k]?.n7 ?? null, layers[k].surgePct, H[k]?.dir ?? null]])), idx: Object.fromEntries(Object.entries(layers).map(([k, v]) => [k, v.index])) });
+history.push({ t: now.toISOString(), v: 2, nv: Object.fromEntries(Object.entries(layers).map(([k, l]) => [k, l.newsRaw])), n: counts, spread, fear: fear?.value, chain: Object.fromEntries(Object.entries(signal).map(([k, v]) => [k, [money[k]?.z ?? null, LAW[k]?.n7 ?? null, layers[k].surgePct, H[k]?.dir ?? null]])), idx: Object.fromEntries(Object.entries(layers).map(([k, v]) => [k, v.index])) });
 history = history.filter(h => now - Date.parse(h.t) < 30 * 864e5);
 const composite = Math.round(Object.values(layers).reduce((s, l) => s + l.index, 0) / LAYERS.length);
 
-const out = { updated: now.toISOString(), next: new Date(+now + 4 * 36e5).toISOString(), composite, compositeTier: tier(composite), fear, signal, hard: H, law: LAW, weights: { money: .35, data: .30, law: .15, news: .20 }, moves: moves.slice(0, 10), layers, hotspots, convergence, macro: mkts,
+const out = { updated: now.toISOString(), next: new Date(+now + 4 * 36e5).toISOString(), composite, compositeTier: tierBy(composite, CAL.thrComp), calib: { thr: CAL.thr, thrComp: CAL.thrComp, replay: CAL.replay, method: 'percentile vs ~3y history; tiers: top 25% / 8% / 2% of past-year days' }, marketsAsOf: mAsOf, marketsStale: mStale, fear, signal, hard: H, law: LAW, weights: { money: .35, data: .30, law: .15, news: .20 }, moves: moves.slice(0, 10), layers, hotspots, convergence, macro: mkts,
   feeds: { ics: ics ? { d1: ics.d1, d7: ics.d7, latest: ics.latest.slice(0, 3) } : null, kev: kev ? { d1: kev.d1, d7: kev.d7, latest: kev.latest } : null,
     outages: outages ? outages.countries.slice(0, 12) : null, disasters: disasters ? disasters.slice(0, 12).map(({ title, url, type, level, country }) => ({ title, url, type, level, country })) : null },
   sources };

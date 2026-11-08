@@ -41,15 +41,15 @@ async function portwatch(get, log, now) {
   return P;
 }
 
-/* ---------- GDACS drought archive (Orange/Red since 2019) ---------- */
+/* ---------- GDACS archive: Orange/Red droughts, floods and tropical cyclones since 2019 ---------- */
 async function gdacsArchive(get, now) {
   const out = [];
-  for (let pg = 1; pg <= 5; pg++) {
-    const j = await get(`https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventlist=DR&fromDate=2019-01-01&toDate=${iso(now)}&alertlevel=Orange;Red&pagenumber=${pg}`);
+  for (const T of ['DR', 'FL', 'TC']) for (let pg = 1; pg <= 8; pg++) {
+    const j = await get(`https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH?eventlist=${T}&fromDate=2019-01-01&toDate=${iso(now)}&alertlevel=Orange;Red&pagenumber=${pg}`);
     const f = j?.features || []; if (!f.length) break;
     for (const e of f) { const p = e.properties, c = e.geometry?.coordinates || [];
       const cs = String(p.country || '').split(',').map(s => s.trim()).filter(Boolean);
-      out.push({ name: cs.length === 1 ? cs[0] : (p.eventname || 'Drought'), lat: c[1], lon: c[0], from: Date.parse(p.fromdate), to: Date.parse(p.todate), level: p.alertlevel, url: p.url?.report || '' }); }
+      out.push({ type: T, name: T === 'TC' ? (p.eventname ? 'Cyclone ' + p.eventname : 'Tropical cyclone') : cs.length === 1 ? cs[0] : (p.eventname || (T === 'FL' ? 'Flood' : 'Drought')), lat: c[1], lon: c[0], from: Date.parse(p.fromdate), to: Date.parse(p.todate), level: p.alertlevel }); }
     if (f.length < 100) break;
   }
   return out.filter(e => isFinite(e.lat) && isFinite(e.from));
@@ -65,9 +65,12 @@ async function iodaYears(get, now, prev) {
     for (const [m0, m1] of [[0, 6], [6, 12]]) {
       const from = Math.floor(Date.UTC(y, m0, 1) / 1000), until = Math.floor(Math.min(Date.UTC(y, m1, 1), +now - 36e5) / 1000);
       if (until <= from) continue;
-      const j = await get(`https://api.ioda.inetintel.cc.gatech.edu/v2/outages/summary?from=${from}&until=${until}&entityType=country&limit=300`, { tries: 2, timeout: 90000 });
-      if (!j?.data) { ok = false; break; }
-      for (const d of j.data) acc[d.entity.name] = (acc[d.entity.name] || 0) + d.event_cnt;
+      const url = (a, b) => `https://api.ioda.inetintel.cc.gatech.edu/v2/outages/summary?from=${a}&until=${b}&entityType=country&limit=300`;
+      let j = await get(url(from, until), { tries: 1, timeout: 90000 }), parts = j?.data ? [j] : [];
+      if (!j?.data) { const mid = Math.floor((from + until) / 2); // fall back to quarters
+        for (const [a, b] of [[from, mid], [mid, until]]) { const q = await get(url(a, b), { tries: 2, timeout: 90000 }); if (q?.data) parts.push(q); else { ok = false; break; } } }
+      if (!ok) break;
+      for (const q of parts) for (const d of q.data) acc[d.entity.name] = (acc[d.entity.name] || 0) + d.event_cnt;
     }
     if (ok) out[y] = acc;
   }
@@ -77,21 +80,22 @@ async function iodaYears(get, now, prev) {
 /* ---------- SANS ISC / DShield: scanning of industrial-control ports ---------- */
 export const ICS_PORTS = [[502, 'Modbus'], [102, 'S7comm'], [20000, 'DNP3'], [44818, 'EtherNet/IP'], [47808, 'BACnet']];
 async function dshield(get, now) {
-  const from = iso(+now - ARC_DAYS * DAY), to = iso(now), out = {};
+  const start = '2019-01-01', to = iso(+now - DAY), ports = {}, n = Math.round((Date.parse(to) - Date.parse(start)) / DAY) + 1;
   for (const [port] of ICS_PORTS) {
-    const j = await get(`https://isc.sans.edu/api/porthistory/${port}/${from}/${to}?json`, { wait: 1500 });
-    if (!j) continue;
-    out[port] = Object.values(j).filter(r => r && r.date).map(r => [r.date, +r.sources || 0, +r.records || 0]);
+    const j = await get(`https://isc.sans.edu/api/porthistory/${port}/${start}/${to}?json`, { wait: 1500, timeout: 60000 });
+    if (!j) continue; const arr = new Array(n).fill(0);
+    for (const r of Object.values(j)) if (r && r.date) { const i = Math.round((Date.parse(r.date) - Date.parse(start)) / DAY); if (i >= 0 && i < n) arr[i] = +r.sources || 0; }
+    ports[port] = arr;
   }
-  return Object.keys(out).length ? out : null;
+  return Object.keys(ports).length ? { start, ports } : null;
 }
 
 /* ---------- backfill cache: heavy historical pulls refreshed daily/weekly ---------- */
 export async function backfill(get, log, now) {
   const B = await readJSON('backfill.json', {}), age = k => B[k + '_at'] ? (+now - Date.parse(B[k + '_at'])) / 36e5 : 1e9;
   if (age('portwatch') > 20) { const v = await portwatch(get, log, now); if (v) { B.portwatch = v; B.portwatch_at = now.toISOString(); } }
-  if (age('dshield') > 11) { const v = await dshield(get, now); if (v) { B.dshield = v; B.dshield_at = now.toISOString(); } }
-  if (age('gdacs') > 70) { const v = await gdacsArchive(get, now); if (v.length) { B.gdacs = v; B.gdacs_at = now.toISOString(); } }
+  if (age('dshield') > 11 || !B.dshield2) { const v = await dshield(get, now); if (v) { B.dshield2 = v; delete B.dshield; B.dshield_at = now.toISOString(); } }
+  if (age('gdacs') > 70 || !(B.gdacs || []).some(e => e.type === 'TC')) { const v = await gdacsArchive(get, now); if (v.length) { B.gdacs = v; B.gdacs_at = now.toISOString(); } }
   if (age('ioda') > 70) { B.ioda = await iodaYears(get, now, B.ioda); const Y = new Date(now).getUTCFullYear(); if ([...Array(Y - 2018).keys()].every(i => B.ioda[2019 + i])) B.ioda_at = now.toISOString(); }
   await writeJSON('backfill.json', B);
   return B;
@@ -132,7 +136,7 @@ export async function buildArc(now, B, CENT, log) {
     if (last7.length) info[p.name + '|maritime'] = { transits7: +mean(last7).toFixed(1), normal: +p.base.toFixed(1), pct: Math.round((mean(last7) / p.base - 1) * 100), through: ds[ds.length - 1], src: 'IMF PortWatch' };
   }
   // 3) GDACS droughts (Orange/Red), spanning their whole duration
-  for (const e of B.gdacs || []) { const z = zone(e.name, 'water', e.lat, e.lon), lv = e.level === 'Red' ? 9 : 6; z.src.add('gdacs');
+  for (const e of B.gdacs || []) { const z = zone(e.name, e.type === 'TC' ? 'power' : 'water', e.lat, e.lon), lv = e.level === 'Red' ? 9 : 6; z.src.add('gdacs');
     for (let t = Math.max(e.from, Date.parse(ARC_FROM + '-01')); t <= Math.min(e.to || +now, +now); t += DAY) mark(z, t, lv); }
   // 4) IODA yearly outage counts → months of that year
   if (B.ioda) { const all = Object.values(B.ioda).flatMap(y => Object.values(y)).sort((a, b) => a - b), p90 = all[Math.floor(all.length * .9)] || 50, p75 = all[Math.floor(all.length * .75)] || 10;
@@ -218,13 +222,12 @@ export function hardSignals(B, now, cur) {
   if (B.portwatch) { const majors = Object.values(B.portwatch).filter(p => p.base >= 15), off = (p, endIdx) => { const ds = Object.keys(p.days).sort(), w = ds.slice(Math.max(0, ds.length - 7 - endIdx), ds.length - endIdx).map(d => p.days[d]); return w.length ? Math.abs(mean(w) / p.base - 1) >= .25 : false; };
     const a = majors.filter(p => off(p, 0)).length, b = majors.filter(p => off(p, 28)).length, last = Object.keys(majors[0]?.days || {}).sort().pop();
     H.maritime = { v: a, ref: b, dir: a > b ? 1 : a < b ? -1 : 0, v01: clamp(a / Math.max(1, majors.length) * 2.5, 0, 1), txt: `${a} of ${majors.length} major chokepoints running 25%+ off normal (4 wks ago: ${b}) · AIS through ${last}`, src: 'IMF PortWatch' }; }
-  if (B.dshield) { const byDay = {}; for (const rows of Object.values(B.dshield)) for (const [d, s] of rows) byDay[d] = (byDay[d] || 0) + s;
-    const v = Object.keys(byDay).sort().map(d => byDay[d]); if (v.length > 60) { const r7 = mean(v.slice(-7)), base = v.slice(-97, -7), z = (r7 - mean(base)) / (std(base) || 1);
+  if (B.dshield2) { const v = []; for (const arr of Object.values(B.dshield2.ports)) arr.forEach((x, i) => v[i] = (v[i] || 0) + x); if (v.length > 60) { const r7 = mean(v.slice(-7)), base = v.slice(-97, -7), z = (r7 - mean(base)) / (std(base) || 1);
       H.cyber = { v: Math.round(r7), z: +z.toFixed(2), dir: z >= 1.5 ? 1 : z <= -1.5 ? -1 : 0, v01: clamp(.5 + z / 4, 0, 1), txt: `ICS-port scanners (Modbus, S7, DNP3, EtherNet/IP, BACnet): ${Math.round(r7).toLocaleString()}/day, ${z >= 0 ? '+' : ''}${z.toFixed(1)}σ vs 90d`, src: "SANS ISC DShield", spark: v.slice(-90).map(Math.round) }; } }
   if (cur.outageEvents != null && B.ioda) { const Y = new Date(now).getUTCFullYear(), ly = B.ioda[Y - 1]; if (ly) { const base = Object.values(ly).reduce((a, b) => a + b, 0) / 365, r = cur.outageEvents / (base || 1);
     const s = { v: cur.outageEvents, ref: +base.toFixed(1), dir: r >= 1.4 ? 1 : r <= .6 ? -1 : 0, v01: clamp(r / 2, 0, 1), txt: `${cur.outageEvents} internet outage events (24h) vs ${base.toFixed(0)}/day normal (${Y - 1})`, src: 'IODA' }; H.telecom = s; H.power = { ...s }; } }
-  if (B.gdacs) { const active = t => B.gdacs.filter(e => e.from <= t && (e.to || +now) >= t - 10 * DAY).length, nowN = active(+now), yr = []; for (let i = 7; i < 365; i += 7) yr.push(active(+now - i * DAY));
-    const m = mean(yr); H.water = { v: nowN, ref: +m.toFixed(1), dir: nowN >= m * 1.3 + .5 ? 1 : nowN <= m * .7 - .5 ? -1 : 0, v01: clamp(nowN / Math.max(1, m * 2), 0, 1), txt: `${nowN} Orange/Red drought alerts active vs ${m.toFixed(1)} avg over the past year`, src: 'GDACS' }; }
+  if (B.gdacs) { const active = t => B.gdacs.filter(e => /DR|FL/.test(e.type || 'DR') && e.from <= t && (e.to || +now) >= t - 10 * DAY).length, nowN = active(+now), yr = []; for (let i = 7; i < 365; i += 7) yr.push(active(+now - i * DAY));
+    const m = mean(yr); H.water = { v: nowN, ref: +m.toFixed(1), dir: nowN >= m * 1.3 + .5 ? 1 : nowN <= m * .7 - .5 ? -1 : 0, v01: clamp(nowN / Math.max(1, m * 2), 0, 1), txt: `${nowN} Orange/Red drought & flood alerts active vs ${m.toFixed(1)} avg over the past year`, src: 'GDACS' }; }
   return H;
 }
 export function narrativeHard(history, spread) {
