@@ -11,11 +11,11 @@ const now = new Date();
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sources = {};
 
-async function get(url, { type = 'json', tries = 2, wait = 0, backoff = 6000 } = {}) {
+async function get(url, { type = 'json', tries = 2, wait = 0, backoff = 6000, timeout = 25000 } = {}) {
   for (let i = 0; i < tries; i++) {
     try {
       if (wait) await sleep(wait);
-      const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': '*/*' }, signal: AbortSignal.timeout(25000) });
+      const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': '*/*' }, signal: AbortSignal.timeout(timeout) });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const t = await r.text();
       return type === 'json' ? JSON.parse(t) : t;

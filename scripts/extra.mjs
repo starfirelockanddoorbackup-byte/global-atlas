@@ -60,9 +60,16 @@ async function iodaYears(get, now, prev) {
   const out = { ...(prev || {}) }, Y = new Date(now).getUTCFullYear();
   for (let y = 2019; y <= Y; y++) {
     if (out[y] && y < Y) continue; // past years are final
-    const from = Date.UTC(y, 0, 1) / 1000, until = Math.min(Date.UTC(y + 1, 0, 1), +now) / 1000;
-    const j = await get(`https://api.ioda.inetintel.cc.gatech.edu/v2/outages/summary?from=${from}&until=${until}&entityType=country&limit=300`, { tries: 2 });
-    if (j?.data) out[y] = Object.fromEntries(j.data.map(d => [d.entity.name, d.event_cnt]));
+    // half-year windows keep each query under the API's response time
+    const acc = {}; let ok = true;
+    for (const [m0, m1] of [[0, 6], [6, 12]]) {
+      const from = Math.floor(Date.UTC(y, m0, 1) / 1000), until = Math.floor(Math.min(Date.UTC(y, m1, 1), +now - 36e5) / 1000);
+      if (until <= from) continue;
+      const j = await get(`https://api.ioda.inetintel.cc.gatech.edu/v2/outages/summary?from=${from}&until=${until}&entityType=country&limit=300`, { tries: 2, timeout: 90000 });
+      if (!j?.data) { ok = false; break; }
+      for (const d of j.data) acc[d.entity.name] = (acc[d.entity.name] || 0) + d.event_cnt;
+    }
+    if (ok) out[y] = acc;
   }
   return out;
 }
@@ -85,7 +92,7 @@ export async function backfill(get, log, now) {
   if (age('portwatch') > 20) { const v = await portwatch(get, log, now); if (v) { B.portwatch = v; B.portwatch_at = now.toISOString(); } }
   if (age('dshield') > 11) { const v = await dshield(get, now); if (v) { B.dshield = v; B.dshield_at = now.toISOString(); } }
   if (age('gdacs') > 70) { const v = await gdacsArchive(get, now); if (v.length) { B.gdacs = v; B.gdacs_at = now.toISOString(); } }
-  if (age('ioda') > 70) { B.ioda = await iodaYears(get, now, B.ioda); B.ioda_at = now.toISOString(); }
+  if (age('ioda') > 70) { B.ioda = await iodaYears(get, now, B.ioda); const Y = new Date(now).getUTCFullYear(); if ([...Array(Y - 2018).keys()].every(i => B.ioda[2019 + i])) B.ioda_at = now.toISOString(); }
   await writeJSON('backfill.json', B);
   return B;
 }
