@@ -130,10 +130,22 @@ footer b{color:#c9ccd0}
 .pane .feed{max-height:none}#p-layers .card{border:0;padding:0}
 .caps{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.caps .btn{margin-top:0;padding:10px 4px;font-size:11.5px}
 .srcd{margin-top:10px}.srcd summary{font:700 11px var(--font-mono);letter-spacing:.12em;color:var(--text-muted);display:flex;justify-content:space-between;cursor:pointer;list-style:none}.srcd .src{margin-top:8px}
+.how{position:absolute;top:12px;right:12px;z-index:3;max-width:250px}
+.how .hb{background:rgba(255,255,255,.95);backdrop-filter:blur(8px);border:1px solid var(--border-subtle);border-radius:12px;padding:9px 12px 10px;box-shadow:0 4px 14px rgba(0,0,0,.06)}
+.how .hb>b{font:700 10px var(--font-mono);letter-spacing:.14em;color:var(--text-muted)}
+.how ol{margin:6px 0 0 16px;padding:0;font-size:11.5px;line-height:1.4;color:var(--text-mid)}.how ol li{margin:2px 0}.how ol b{color:var(--text-main)}
+.how .hx{float:right;border:0;background:none;font-size:16px;line-height:1;color:var(--text-muted);cursor:pointer;margin:-2px -4px 0 0}
+.how .hq{display:none;width:30px;height:30px;border-radius:50%;border:1px solid var(--border-card);background:rgba(255,255,255,.95);font:800 14px var(--font-body);cursor:pointer}
+.how.min .hb{display:none}.how.min .hq{display:block;margin-left:auto}
+.srcl h4{font:700 10px var(--font-mono);letter-spacing:.12em;margin:12px 0 4px;display:flex;align-items:center;gap:6px}.srcl h4:first-child{margin-top:0}
+.srcl ul{list-style:none;margin:0;padding:0}.srcl li{font-size:12px;line-height:1.35;padding:4px 0;border-bottom:1px solid var(--border-subtle);display:flex;gap:8px;align-items:baseline}
+.srcl li:last-child{border-bottom:0}.srcl li i{width:7px;height:7px;border-radius:50%;flex:0 0 7px;background:#c7c7cc;transform:translateY(-1px)}.srcl li i.ok{background:var(--alert-green)}.srcl li i.no{background:var(--alert-red)}
+.srcl li span{color:var(--text-muted);font-size:11px}.srcl .tot{font:600 11px var(--font-mono);color:var(--text-mid);background:var(--bg-soft);border-radius:8px;padding:8px 10px;margin-bottom:10px;line-height:1.4}
+.tabbar{overflow-x:auto;scrollbar-width:none}.tabbar::-webkit-scrollbar{display:none}.tabbar button{white-space:nowrap}
 .empty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:30px;font-size:14px;color:var(--text-mid)}
 .empty b{display:block;font-size:17px;color:var(--text-main);margin-bottom:6px}
 @media (max-width:1180px){.grid{grid-template-columns:minmax(0,1fr) 340px}.grid>.left{grid-column:2;grid-row:1}.grid>.mid{grid-column:1;grid-row:1/3}.grid>.right{grid-column:2}}
-@media (max-width:820px){body{padding:calc(var(--sat) + 10px) 10px calc(var(--sab) + 14px)}.grid{grid-template-columns:1fr}.grid>.left,.grid>.mid,.grid>.right{grid-column:1;grid-row:auto}.grid>.mid{order:-1}.grid>.left{display:none}.lay p{font-size:11px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.lay h2{font-size:13px}#globe{height:min(52vh,460px)}.tabbar .mob{display:block}.pane{max-height:70vh}.brand .tool{font-size:19px}.hint{display:none}.lay{max-width:72%}}
+@media (max-width:820px){body{padding:calc(var(--sat) + 10px) 10px calc(var(--sab) + 14px)}.grid{grid-template-columns:1fr}.grid>.left,.grid>.mid,.grid>.right{grid-column:1;grid-row:auto}.grid>.mid{order:-1}.grid>.left{display:none}.lay p{font-size:11px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.lay h2{font-size:13px}.how{top:auto;bottom:62px;right:10px}.how .hb{max-width:230px}#globe{height:min(52vh,460px)}.tabbar .mob{display:block}.pane{max-height:70vh}.brand .tool{font-size:19px}.hint{display:none}.lay{max-width:72%}}
 </style>
 </head>
 <body>
@@ -154,6 +166,8 @@ footer b{color:#c9ccd0}
  <section class="mid">
   <div class="card globecard">
    <canvas id="globe"></canvas>
+   <div class="how" id="how"><button class="hq" id="hq" aria-label="How to use">?</button><div class="hb"><b>HOW TO USE</b><button class="hx" id="hx" aria-label="Hide">×</button>
+    <ol><li><b>Color zones</b> = trouble spots. Brighter = newer.</li><li><b>Blue glow</b> = several kinds of trouble in one place.</li><li><b>Tap a layer</b> (or several) to filter.</li><li><b>Tap a zone</b> for the headlines and data.</li><li><b>Switch time</b> below: today → since 2019.</li></ol></div></div>
    <div class="gov"><div class="lay" id="lay"><h2><span class="sw" id="laysw" style="background:#000"></span><span id="layt">ALL LAYERS</span></h2><p id="layd">Every flashpoint from the last 24 hours. Dashed rings mark regions where several layers stack up.</p></div></div>
    <div class="pop" id="pop"></div>
    <div class="empty" id="empty"><div><b>First telemetry pull in progress</b>The atlas refreshes every 4 hours. Check back in a few minutes.</div></div>
@@ -162,16 +176,16 @@ footer b{color:#c9ccd0}
  </section>
  <section class="col right">
   <div class="card tabs">
-   <div class="tabbar" id="tabbar"><button data-t="layers" class="mob">LAYERS</button><button data-t="moves" class="on">MOVES</button><button data-t="sig">SIGNALS</button><button data-t="stack">STACKING</button><button data-t="feed">ARTICLES</button></div>
+   <div class="tabbar" id="tabbar"><button data-t="layers" class="mob">LAYERS</button><button data-t="moves" class="on">MOVES</button><button data-t="sig">SIGNALS</button><button data-t="stack">STACKING</button><button data-t="feed">ARTICLES</button><button data-t="srcs">SOURCES</button></div>
    <div class="pane" id="p-layers"></div>
    <div class="pane on" id="p-moves"><div class="ttl"><span>MOVES</span><span>SINCE LAST PULL</span></div><div id="moves"></div></div>
    <div class="pane" id="p-sig"><div class="ttl"><span>SIGNAL CHAIN</span><span>MONEY › LAW › NEWS › DATA</span></div><div id="sig"></div></div>
    <div class="pane" id="p-stack"><div class="ttl"><span>STACKING UP</span><span id="stackt">LAYER INTERSECTIONS · 24H</span></div><div class="stack" id="stack"></div></div>
    <div class="pane" id="p-feed"><div class="ttl"><span id="feedt">FLASHPOINTS · 24H</span><span>TAP TO READ</span></div><div id="divbox"></div><div class="feed" id="feed"></div></div>
+   <div class="pane" id="p-srcs"><div class="ttl"><span>SOURCES</span><span id="srcn"></span></div><div class="srcl" id="srcl"></div></div>
   </div>
   <div class="card"><div class="ttl"><span>EXPORT & CAPTURE</span></div>
    <div class="caps"><button class="btn dark" id="cap1">Post 4:5</button><button class="btn" id="cap2">Story 9:16</button><button class="btn" id="cap3">Video 8s</button></div>
-   <details class="srcd"><summary><span>SOURCE STATUS</span><span id="srcn"></span></summary><div class="src" id="src"></div></details>
   </div>
  </section>
 </div>
@@ -274,8 +288,19 @@ function render(){status();$('#empty').style.display=D?'none':'flex';
  // feed
  feed();
  // sources
- const S=D&&D.sources||{},names={cisa_ics:'CISA ICS',cisa_kev:'CISA KEV',ioda:'IODA outages',gdacs:'GDACS',markets:'Markets',gdelt:'GDELT volume',portwatch:'PortWatch',dshield:'DShield ICS',gdacs_archive:'GDACS archive',ioda_history:'IODA history',federal_register:'Federal Register'};LAY.forEach(l=>{names['gdelt_'+l.id]='GDELT·'+l.s;names['news_'+l.id]='News·'+l.s});
- const ks=Object.keys(S);$('#src').innerHTML=ks.map(k=>`<span class="${S[k]?'ok':'no'}">${names[k]||k}</span>`).join('')||'<span>awaiting first pull</span>';$('#srcn').textContent=ks.length?ks.filter(k=>S[k]).length+'/'+ks.length+' ONLINE':'';
+ const SS=D&&D.sources||{},st=k=>k in SS?(SS[k]?'ok':'no'):'',li=(n,d,k)=>`<li><i class="${k?st(k):''}"></i><div>${n}${d?` <span>· ${d}</span>`:''}</div></li>`;
+ const NEWS=LAY.map(l=>li(`Google News · ${l.n}`,'',`news_${l.id}`)).join('');
+ const MK=(D&&D.macro||[]).map(m=>li(m.name,m.last!=null?'daily close, 1-year history':'unavailable this pull','markets')).join('');
+ const SRC=[
+  ['$ MONEY','#0f766e',MK+li('Market fear gauge','VIX + gold + dollar, 5-day moves vs 1 year','markets')],
+  ['§ LAW','#1d4ed8',[['Treasury · Office of Foreign Assets Control','sanctions'],['Commerce · Bureau of Industry & Security','export controls'],['State Department','arms, sanctions'],['Defense Department',''],['Federal Energy Regulatory Commission',''],['Energy Department',''],['Federal Maritime Commission',''],['Maritime Administration',''],['Agriculture Department','food programs'],['Army Corps of Engineers','water'],['Bureau of Reclamation','water'],['Federal Communications Commission',''],['NTIA','telecom'],['All agencies','cybersecurity rules']].map(([n,d])=>li(n,d,'federal_register')).join('')],
+  ['◉ DATA','#0284c7',[['IMF PortWatch','daily ship transits, 28 chokepoints, since 2019','portwatch'],['SANS ISC DShield','scanning of 5 industrial-control ports','dshield'],['IODA (Georgia Tech)','live internet outages by country','ioda'],['IODA history','yearly outage counts since 2019','ioda_history'],['GDACS (UN / EU)','disaster & drought alerts','gdacs'],['GDACS archive','Orange/Red droughts since 2019','gdacs_archive'],['CISA ICS advisories','industrial-control vulnerabilities','cisa_ics'],['CISA Known Exploited Vulnerabilities','actively exploited flaws','cisa_kev']].map(([n,d,k])=>li(n,d,k)).join('')],
+  ['NEWS','#86868b',NEWS+li('GDELT Project','global event volume (when available)','gdelt')],
+  ['NARRATIVE BLOCS','#7c3aed',[['Western wires','Reuters, AP, BBC'],['Russian state media','RT, TASS, Sputnik'],['Chinese state media','Global Times, CGTN, Xinhua, China Daily'],['Gulf / Arab media','Al Jazeera, Arab News, The National'],['Indian media','The Hindu, Times of India, NDTV, Hindustan Times'],['Iranian state media','Press TV, Tehran Times']].map(([n,d])=>li(n,d,'news_narrative')).join('')],
+  ['MAP','#a1a1a6',li('Natural Earth land outlines','public domain','')]];
+ const cnt=(SRC.map(x=>x[2]).join('').match(/<li>/g)||[]).length,ks=Object.keys(SS),on=ks.filter(k=>SS[k]).length;
+ $('#srcl').innerHTML=`<div class="tot">${cnt} sources across money, law, news and measured data, all free and public. Checked every 4 hours.${ks.length?`<br>${on} of ${ks.length} feeds answered on the last pull.`:''}</div>`+SRC.map(([h,c,b])=>`<h4 style="color:${c}">${h}</h4><ul>${b}</ul>`).join('');
+ $('#srcn').textContent=ks.length?on+'/'+ks.length+' FEEDS ONLINE':'';
 }
 
 function refresh(){view();const cv2=INT;
@@ -403,6 +428,9 @@ async function fontsIn(){try{await Promise.all(['800 40px "Plus Jakarta Sans"','
 async function shot(story){await fontsIn();const W=1080,H=story?1920:1350,c=document.createElement('canvas');c.width=W;c.height=H;brandFrame(c.getContext('2d'),W,H,performance.now()/1000,story);
  c.toBlob(b=>save(b,`global-atlas-${selKey()}-${stamp()}${story?'-story':''}.png`),'image/png')}
 $('#cap1').onclick=()=>shot(false);$('#cap2').onclick=()=>shot(true);
+// how-to box
+{const h=$('#how'),k='atlas-how-min';let m=null;try{m=localStorage.getItem(k)}catch(e){}if(m==='1'||(m==null&&matchMedia('(max-width:820px)').matches))h.classList.add('min');
+ const set=v=>{h.classList.toggle('min',v);try{localStorage.setItem(k,v?'1':'0')}catch(e){}};$('#hx').onclick=()=>set(true);$('#hq').onclick=()=>set(false)}
 // tabs (on phones the layer readout becomes the first tab)
 function tab(t){document.querySelectorAll('#tabbar button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('on',p.id==='p-'+t))}
 document.querySelectorAll('#tabbar button').forEach(b=>b.onclick=()=>tab(b.dataset.t));
