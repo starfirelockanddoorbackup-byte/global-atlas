@@ -143,59 +143,105 @@ export async function buildArc(now, B, CENT, log) {
 export const MKT = [
   // name, yahoo, stooq, stress direction (+1 up = stress, 0 = either way)
   ['WTI Oil', 'CL=F', 'cl.f', 1], ['Brent', 'BZ=F', 'cb.f', 1], ['Gold', 'GC=F', 'gc.f', 1], ['VIX', '^VIX', 'vi.f', 1], ['Dollar', 'DX-Y.NYB', 'dx.f', 1],
-  ['Wheat', 'ZW=F', 'zw.f', 1], ['Shipping (BDRY)', 'BDRY', 'bdry.us', 1], ['EU Gas (TTF)', 'TTF=F', null, 1], ['US Nat Gas', 'NG=F', 'ng.f', 1], ['Rare Earths (REMX)', 'REMX', 'remx.us', 0]];
+  ['Wheat', 'ZW=F', 'zw.f', 1], ['Shipping (BDRY)', 'BDRY', 'bdry.us', 1, 1], ['EU Gas (TTF)', 'TTF=F', null, 1], ['US Nat Gas', 'NG=F', 'ng.f', 1], ['Rare Earths (REMX)', 'REMX', 'remx.us', 0, 1],
+  // sector ETFs: price either way, and unusual volume (positioning ahead of news)
+  ['Defense (ITA)', 'ITA', 'ita.us', 0, 1], ['Cyber (CIBR)', 'CIBR', 'cibr.us', 0, 1], ['Semis (SOXX)', 'SOXX', 'soxx.us', 0, 1], ['Utilities (XLU)', 'XLU', 'xlu.us', 0, 1]];
 export async function markets(get) {
   const out = [];
-  for (const [name, y, s, dir] of MKT) {
-    let c = null;
+  for (const [name, y, s, dir, hasVol] of MKT) {
+    let c = null, vz = null;
     const j = await get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(y)}?range=1y&interval=1d`, { tries: 1 });
-    c = j?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(v => v != null);
+    const q = j?.chart?.result?.[0]?.indicators?.quote?.[0];
+    c = q?.close?.filter(v => v != null);
+    if (hasVol && q?.volume) { const v = q.volume.filter(x => x != null && x > 0); if (v.length > 70) { const base = v.slice(-66, -3), sd = std(base); if (sd) vz = +((mean(v.slice(-3)) - mean(base)) / sd).toFixed(2); } }
     if ((!c || c.length < 30) && s) { const csv = await get(`https://stooq.com/q/d/l/?s=${s}&i=d`, { type: 'text', tries: 1 });
       c = (csv || '').trim().split('\n').slice(1).map(r => +r.split(',')[4]).filter(v => isFinite(v) && v > 0).slice(-260); }
     if (!c || c.length < 2) { out.push({ name, last: null, chg: null }); continue; }
     const last = c[c.length - 1], prev = c[c.length - 2], r5 = [];
     for (let i = 5; i < c.length; i++) r5.push((c[i] / c[i - 5] - 1) * 100);
     const chg5 = r5[r5.length - 1], sd = std(r5.slice(0, -1)), z5 = sd ? chg5 / sd : null;
-    out.push({ name, last, chg: (last - prev) / prev * 100, chg5: +chg5.toFixed(2), z5: z5 != null ? +z5.toFixed(2) : null, dir, spark: c.slice(-60).map(v => +v.toPrecision(5)) });
+    out.push({ name, last, chg: (last - prev) / prev * 100, chg5: +chg5.toFixed(2), z5: z5 != null ? +z5.toFixed(2) : null, vz, dir, etf: !!hasVol, spark: c.slice(-60).map(v => +v.toPrecision(5)) });
   }
   return out;
 }
 
-/* ---------- signal check: do headlines, markets and hard data agree? ---------- */
-const LAYER_MKT = { military: ['Gold', 'VIX', 'Brent'], maritime: ['Shipping (BDRY)', 'Brent'], power: ['EU Gas (TTF)', 'US Nat Gas'], strain: ['Wheat', 'WTI Oil'] };
-export function hardSignals(B, now, history, cur) {
+/* ---------- legislation & official action: US Federal Register (rules, proposed rules, presidential documents) ---------- */
+const LAW_Q = {
+  military: [['foreign-assets-control-office', 'state-department', 'defense-department']],
+  maritime: [['federal-maritime-commission', 'maritime-administration']],
+  cyber: [['industry-and-security-bureau'], null, 'cybersecurity'],
+  power: [['federal-energy-regulatory-commission', 'energy-department']],
+  strain: [['agriculture-department']],
+  water: [['engineers-corps', 'reclamation-bureau']],
+  telecom: [['federal-communications-commission', 'national-telecommunications-and-information-administration']],
+};
+export async function law(get, now) {
+  const since = iso(+now - 98 * DAY), out = {};
+  const q = (ag, term) => `https://www.federalregister.gov/api/v1/documents.json?per_page=1000&order=newest&conditions[publication_date][gte]=${since}` +
+    (ag ? ag.map(a => `&conditions[agencies][]=${a}`).join('') : '') + (term ? `&conditions[term]=${encodeURIComponent(term)}` : '') +
+    '&conditions[type][]=RULE&conditions[type][]=PRORULE&conditions[type][]=PRESDOCU&fields[]=title&fields[]=publication_date&fields[]=html_url&fields[]=type';
+  for (const [id, [ag, , term]] of Object.entries(LAW_Q)) {
+    const docs = {};
+    for (const u of [q(ag), term ? q(null, term) : null].filter(Boolean)) { const j = await get(u, { wait: 400 }); for (const d of j?.results || []) docs[d.html_url] = d; }
+    const all = Object.values(docs); if (!all.length && !Object.keys(docs).length) { out[id] = { n7: 0, base: 0, dir: 0, latest: [] }; continue; }
+    const t = d => Date.parse(d.publication_date), n7 = all.filter(d => +now - t(d) < 7 * DAY).length, base = all.filter(d => +now - t(d) >= 7 * DAY).length / 13;
+    out[id] = { n7, base: +base.toFixed(1), dir: n7 >= Math.max(2, base * 1.8) ? 1 : base >= 2 && n7 <= base * .3 ? -1 : 0,
+      latest: all.sort((a, b) => t(b) - t(a)).slice(0, 3).map(d => ({ title: d.title, url: d.html_url, t: d.publication_date, type: d.type })) };
+  }
+  return out;
+}
+
+/* ---------- signal chain: MONEY → LAW → NEWS → DATA ----------
+   Insiders act first, money moves, then policy, then the narrative, then the measured data.
+   Headlines are weighted least: they can be pushed. Money, law and measured data are treated as hard. */
+const LAYER_MKT = { military: ['Gold', 'VIX', 'Brent', 'Defense (ITA)'], maritime: ['Shipping (BDRY)', 'Brent'], cyber: ['Cyber (CIBR)', 'Semis (SOXX)', 'Rare Earths (REMX)'],
+  power: ['EU Gas (TTF)', 'US Nat Gas', 'Utilities (XLU)'], strain: ['Wheat', 'WTI Oil'], water: ['Wheat'] };
+export const WEIGHTS = { money: .35, data: .30, law: .15, news: .20 };
+export function moneySignal(id, mkts) {
+  const M = Object.fromEntries(mkts.map(m => [m.name, m])), c = [];
+  for (const n of LAYER_MKT[id] || []) { const m = M[n]; if (!m) continue;
+    if (m.z5 != null) c.push({ z: m.dir ? m.z5 * m.dir : Math.abs(m.z5), txt: `${n} ${m.chg5 >= 0 ? '+' : ''}${m.chg5.toFixed(1)}% over 5d (${m.z5 >= 0 ? '+' : ''}${m.z5.toFixed(1)}σ)` });
+    if (m.vz != null && m.vz > 0) c.push({ z: m.vz * .8, txt: `${n} volume ${m.vz.toFixed(1)}σ above its 3-month norm` }); }
+  if (!c.length) return null; const top = c.sort((a, b) => Math.abs(b.z) - Math.abs(a.z))[0];
+  return { z: +top.z.toFixed(2), dir: top.z >= 1.5 ? 1 : top.z <= -1.5 ? -1 : 0, txt: top.txt, v01: clamp(.5 + top.z / 4, 0, 1) };
+}
+export function scoreLayer(parts) { let s = 0, w = 0; for (const [k, v] of Object.entries(parts)) if (v != null && WEIGHTS[k]) { s += WEIGHTS[k] * v; w += WEIGHTS[k]; } return Math.round(100 * s / (w || 1)); }
+export function hardSignals(B, now, cur) {
   const H = {};
-  // maritime: share of major chokepoints running >=25% off normal now vs 4 weeks earlier
   if (B.portwatch) { const majors = Object.values(B.portwatch).filter(p => p.base >= 15), off = (p, endIdx) => { const ds = Object.keys(p.days).sort(), w = ds.slice(Math.max(0, ds.length - 7 - endIdx), ds.length - endIdx).map(d => p.days[d]); return w.length ? Math.abs(mean(w) / p.base - 1) >= .25 : false; };
     const a = majors.filter(p => off(p, 0)).length, b = majors.filter(p => off(p, 28)).length, last = Object.keys(majors[0]?.days || {}).sort().pop();
-    H.maritime = { v: a, ref: b, dir: a > b ? 1 : a < b ? -1 : 0, txt: `${a} of ${majors.length} major chokepoints running 25%+ off normal (4 wks ago: ${b}) · AIS through ${last}`, src: 'IMF PortWatch' }; }
-  // cyber: unique scanners hitting industrial-control ports, last 7 days vs prior 90
+    H.maritime = { v: a, ref: b, dir: a > b ? 1 : a < b ? -1 : 0, v01: clamp(a / Math.max(1, majors.length) * 2.5, 0, 1), txt: `${a} of ${majors.length} major chokepoints running 25%+ off normal (4 wks ago: ${b}) · AIS through ${last}`, src: 'IMF PortWatch' }; }
   if (B.dshield) { const byDay = {}; for (const rows of Object.values(B.dshield)) for (const [d, s] of rows) byDay[d] = (byDay[d] || 0) + s;
     const v = Object.keys(byDay).sort().map(d => byDay[d]); if (v.length > 60) { const r7 = mean(v.slice(-7)), base = v.slice(-97, -7), z = (r7 - mean(base)) / (std(base) || 1);
-      H.cyber = { v: Math.round(r7), z: +z.toFixed(2), dir: z >= 1.5 ? 1 : z <= -1.5 ? -1 : 0, txt: `ICS port scanners (Modbus, S7, DNP3, EtherNet/IP, BACnet): ${Math.round(r7).toLocaleString()}/day, ${z >= 0 ? '+' : ''}${z.toFixed(1)}σ vs 90d`, src: 'SANS ISC DShield', spark: v.slice(-90) }; } }
-  // telecom/power: IODA outage events today vs last full year's daily average
+      H.cyber = { v: Math.round(r7), z: +z.toFixed(2), dir: z >= 1.5 ? 1 : z <= -1.5 ? -1 : 0, v01: clamp(.5 + z / 4, 0, 1), txt: `ICS-port scanners (Modbus, S7, DNP3, EtherNet/IP, BACnet): ${Math.round(r7).toLocaleString()}/day, ${z >= 0 ? '+' : ''}${z.toFixed(1)}σ vs 90d`, src: "SANS ISC DShield", spark: v.slice(-90).map(Math.round) }; } }
   if (cur.outageEvents != null && B.ioda) { const Y = new Date(now).getUTCFullYear(), ly = B.ioda[Y - 1]; if (ly) { const base = Object.values(ly).reduce((a, b) => a + b, 0) / 365, r = cur.outageEvents / (base || 1);
-    const s = { v: cur.outageEvents, ref: +base.toFixed(1), dir: r >= 1.4 ? 1 : r <= .6 ? -1 : 0, txt: `${cur.outageEvents} internet outage events (24h) vs ${base.toFixed(0)}/day normal (${Y - 1})`, src: 'IODA' }; H.telecom = s; H.power = { ...s }; } }
-  // water: Orange/Red droughts active now vs average over the past year
+    const s = { v: cur.outageEvents, ref: +base.toFixed(1), dir: r >= 1.4 ? 1 : r <= .6 ? -1 : 0, v01: clamp(r / 2, 0, 1), txt: `${cur.outageEvents} internet outage events (24h) vs ${base.toFixed(0)}/day normal (${Y - 1})`, src: 'IODA' }; H.telecom = s; H.power = { ...s }; } }
   if (B.gdacs) { const active = t => B.gdacs.filter(e => e.from <= t && (e.to || +now) >= t).length, nowN = active(+now), yr = []; for (let i = 7; i < 365; i += 7) yr.push(active(+now - i * DAY));
-    const m = mean(yr); H.water = { v: nowN, ref: +m.toFixed(1), dir: nowN >= m * 1.3 + .5 ? 1 : nowN <= m * .7 - .5 ? -1 : 0, txt: `${nowN} Orange/Red drought alerts active vs ${m.toFixed(1)} avg over the past year`, src: 'GDACS' }; }
-  // narrative: media-bloc tone spread vs its own recent average
-  const sp = history.map(h => h.spread).filter(v => v != null);
-  if (cur.spread != null && sp.length >= 6) { const m = mean(sp), s = std(sp) || .1, z = (cur.spread - m) / s;
-    H.narrative = { v: cur.spread, dir: z >= 1.5 ? 1 : z <= -1.5 ? -1 : 0, txt: `Media-bloc tone spread ${cur.spread} vs ${m.toFixed(2)} recent avg`, src: 'Google News blocs' }; }
+    const m = mean(yr); H.water = { v: nowN, ref: +m.toFixed(1), dir: nowN >= m * 1.3 + .5 ? 1 : nowN <= m * .7 - .5 ? -1 : 0, v01: clamp(nowN / Math.max(1, m * 2), 0, 1), txt: `${nowN} Orange/Red drought alerts active vs ${m.toFixed(1)} avg over the past year`, src: 'GDACS' }; }
   return H;
 }
-export function signalCheck(layers, mkts, H) {
-  const M = Object.fromEntries(mkts.map(m => [m.name, m])), out = {};
+export function narrativeHard(history, spread) {
+  if (spread == null) return null; const sp = history.map(h => h.spread).filter(v => v != null), v01 = clamp(spread / 2.5, 0, 1);
+  if (sp.length < 6) return { v: spread, dir: 0, v01, txt: `Media-bloc tone spread ${spread} (baseline building)`, src: 'Google News blocs' };
+  const m = mean(sp), z = (spread - m) / (std(sp) || .1);
+  return { v: spread, dir: z >= 1.5 ? 1 : z <= -1.5 ? -1 : 0, v01, txt: `Media-bloc tone spread ${spread} vs ${m.toFixed(2)} recent avg`, src: 'Google News blocs' };
+}
+export function signalCheck(layers, money, LAW, H) {
+  const out = {};
   for (const [id, L] of Object.entries(layers)) {
-    const head = L.surgePct != null ? (L.surgePct >= 25 || (L.delta ?? 0) >= 5 ? 1 : L.surgePct <= -25 && (L.delta ?? 0) <= -3 ? -1 : 0) : (L.delta ?? 0) >= 5 ? 1 : (L.delta ?? 0) <= -5 ? -1 : 0;
-    let mk = null, mtxt = '';
-    if (LAYER_MKT[id]) { const zs = LAYER_MKT[id].map(n => M[n]).filter(m => m && m.z5 != null).map(m => ({ n: m.name, z: m.dir ? m.z5 * m.dir : Math.abs(m.z5), c: m.chg5 }));
-      if (zs.length) { const top = zs.sort((a, b) => Math.abs(b.z) - Math.abs(a.z))[0]; mk = top.z >= 1.5 ? 1 : top.z <= -1.5 ? -1 : 0; mtxt = `${top.n} ${top.c >= 0 ? '+' : ''}${top.c.toFixed(1)}% over 5d (${top.z >= 0 ? '+' : ''}${top.z.toFixed(1)}σ)`; } }
-    const hd = H[id] ? H[id].dir : null;
-    const other = [mk, hd].filter(v => v != null), up = other.some(v => v === 1), down = other.some(v => v === -1);
-    const read = head === 1 && up ? 'CONFIRMED' : head === 1 && down ? 'CONTRADICTED' : head === 1 ? (other.length ? 'HEADLINES ONLY' : 'HEADLINE SURGE') : up ? 'QUIET SIGNAL' : head === -1 && !up ? 'EASING' : 'STEADY';
-    out[id] = { head, mkt: mk, hard: hd, read, mtxt, htxt: H[id]?.txt || '', hsrc: H[id]?.src || '' };
+    const news = L.surgePct != null ? (L.surgePct >= 25 || (L.delta ?? 0) >= 5 ? 1 : L.surgePct <= -25 && (L.delta ?? 0) <= -3 ? -1 : 0) : 0;
+    const mo = money[id] ? money[id].dir : null, lw = LAW[id] ? LAW[id].dir : null, da = H[id] ? H[id].dir : null;
+    const read = mo === 1 && news !== 1 ? 'MONEY MOVING FIRST'
+      : news === 1 && (mo === 1 || da === 1) ? 'CONFIRMED'
+      : news === 1 && da === -1 ? 'CONTRADICTED'
+      : news === 1 ? 'NARRATIVE ONLY'
+      : lw === 1 ? 'POLICY MOVING'
+      : da === 1 ? 'DATA MOVING'
+      : [mo, da, news].filter(v => v != null).every(v => v === -1) ? 'EASING' : 'STEADY';
+    const lt = LAW[id]?.latest?.[0];
+    out[id] = { money: mo, law: lw, news, data: da, read,
+      mtxt: money[id]?.txt || '', ltxt: LAW[id] ? `${LAW[id].n7} US rules/orders this week vs ${LAW[id].base}/wk${lt ? ` · latest: ${lt.title}` : ''}` : '', lurl: lt?.url || '',
+      dtxt: H[id]?.txt || '', dsrc: H[id]?.src || '' };
   }
   return out;
 }
