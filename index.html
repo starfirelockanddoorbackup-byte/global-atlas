@@ -130,7 +130,7 @@ footer b{color:#c9ccd0}
   </div>
  </section>
  <section class="col right">
-  <div class="card"><div class="ttl"><span>STACKING UP</span><span>MULTI-LAYER REGIONS</span></div><div class="stack" id="stack"></div></div>
+  <div class="card"><div class="ttl"><span>STACKING UP</span><span>LAYER INTERSECTIONS · 24H</span></div><div class="stack" id="stack"></div></div>
   <div class="card"><div class="ttl"><span id="feedt">FLASHPOINTS · 24H</span></div><div id="divbox"></div><div class="feed" id="feed"></div></div>
   <div class="card"><div class="ttl"><span>EXPORT & CAPTURE</span></div>
    <button class="btn dark" id="cap1">Snapshot · 4:5 post</button>
@@ -156,8 +156,20 @@ const LAY=[
  {id:'telecom',s:'Telecom & Subsea',n:'Telecom & Subsea Backbone',d:'Fiber cuts, GPS jamming and comms blackouts.'}];
 const css=getComputedStyle(document.documentElement),COL={};LAY.forEach(l=>COL[l.id]=css.getPropertyValue('--'+l.id).trim());
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-let D=null,HIST=[],LAND=[],sel='all',rotY=-.6,rotX=.42,zoom=1,spin=true,drag=null,hits=[],focus=null,popHot=null;
+let D=null,HIST=[],LAND=[],act=new Set(),INT=[],rotY=-.6,rotX=.42,zoom=1,spin=true,drag=null,hits=[],focus=null,popHot=null;
 const cv=$('#globe'),cx=cv.getContext('2d');
+const on=id=>!act.size||act.has(id),selKey=()=>act.size?[...act].join('+'):'all';
+function rgba(h,a){const n=parseInt(h.slice(1),16);return`rgba(${n>>16&255},${n>>8&255},${n&255},${a})`}
+function rec(h){if(!h.last||!D)return .7;const a=(Date.parse(D.updated)-h.last)/864e5;return Math.max(.28,Math.min(1,1-a*.75))}
+function gc(a,b){const r=Math.PI/180,s=Math.sin((b.lat-a.lat)*r/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin((b.lon-a.lon)*r/2)**2;return 2*Math.asin(Math.sqrt(s))/r}
+/* intersections: zones of different layers within ~7 degrees of each other (last 24h) */
+function intersections(){const hs=(D&&D.hotspots||[]).filter(h=>!h.global&&on(h.layer)),par=hs.map((_,i)=>i),f=i=>par[i]===i?i:(par[i]=f(par[i]));
+ for(let i=0;i<hs.length;i++)for(let j=i+1;j<hs.length;j++)if(hs[i].layer!==hs[j].layer&&gc(hs[i],hs[j])<7)par[f(i)]=f(j);
+ const g={};hs.forEach((h,i)=>(g[f(i)]=g[f(i)]||[]).push(h));const out=[];
+ for(const m of Object.values(g)){const ly={};m.forEach(h=>ly[h.layer]=(ly[h.layer]||0)+h.n);const k=Object.keys(ly).length;if(k<2)continue;
+  const w=m.reduce((a,h)=>a+h.n,0),top=[...m].sort((a,b)=>b.n-a.n)[0];
+  out.push({name:top.name,lat:m.reduce((a,h)=>a+h.lat*h.n,0)/w,lon:m.reduce((a,h)=>a+h.lon*h.n,0)/w,count:k,layers:ly,members:m,n:w})}
+ return out.sort((a,b)=>b.count-a.count||b.n-a.n)}
 
 /* ---------- data ---------- */
 async function load(){
@@ -185,30 +197,33 @@ function render(){status();$('#empty').style.display=D?'none':'flex';
  // rows
  $('#rows').innerHTML=LAY.map(l=>{const L=D&&D.layers[l.id]||{};const tr=L.trend||'—',dl=L.delta;
   const sub=L.note||(L.surgePct!=null?`coverage ${L.surgePct>=0?'+':''}${L.surgePct}% vs 7d · tone ${L.tone24??'—'}`:L.articles!=null?`${L.articles} headlines (24h) · tone ${L.tone24??'—'}`:'awaiting data');
-  return `<div class="row ${sel===l.id?'on':''}" data-l="${l.id}"><span class="sw" style="background:${COL[l.id]}"></span><div style="min-width:0"><div class="nm">${l.s}</div><div class="sub">${esc(sub)}</div><div class="br"><div class="bar"><i style="width:${L.index||0}%;background:${COL[l.id]}"></i></div><canvas data-s="${l.id}"></canvas></div></div><div class="tr ${tr}"><span class="v">${L.index??'—'}</span>${tr==='WORSE'?'▲ WORSE':tr==='BETTER'?'▼ BETTER':tr==='NEW'?'NEW':tr==='STEADY'?'● STEADY':''}${dl!=null&&dl!==0?` <span style="font-weight:600">${dl>0?'+':''}${dl}</span>`:''}</div></div>`}).join('');
+  return `<div class="row ${act.has(l.id)?'on':''}" data-l="${l.id}"><span class="sw" style="background:${COL[l.id]}"></span><div style="min-width:0"><div class="nm">${l.s}</div><div class="sub">${esc(sub)}</div><div class="br"><div class="bar"><i style="width:${L.index||0}%;background:${COL[l.id]}"></i></div><canvas data-s="${l.id}"></canvas></div></div><div class="tr ${tr}"><span class="v">${L.index??'—'}</span>${tr==='WORSE'?'▲ WORSE':tr==='BETTER'?'▼ BETTER':tr==='NEW'?'NEW':tr==='STEADY'?'● STEADY':''}${dl!=null&&dl!==0?` <span style="font-weight:600">${dl>0?'+':''}${dl}</span>`:''}</div></div>`}).join('');
  document.querySelectorAll('#rows canvas').forEach(c=>spark(c,HIST.slice(-36).map(h=>h.idx[c.dataset.s]).filter(v=>v!=null),COL[c.dataset.s]));
- document.querySelectorAll('.row').forEach(r=>r.onclick=()=>setSel(sel===r.dataset.l?'all':r.dataset.l));
+ document.querySelectorAll('.row').forEach(r=>r.onclick=()=>toggle(r.dataset.l));
  // macro
  $('#macro').innerHTML=(D&&D.macro||[]).map(m=>`<div class="tick"><small>${esc(m.name.toUpperCase())}</small><b>${m.last!=null?(m.last>=1000?Math.round(m.last).toLocaleString():m.last.toFixed(2)):'—'}</b><span class="${m.chg==null?'fl':m.chg>0?'up':'dn'}">${m.chg==null?'':(m.chg>0?'▲ +':'▼ ')+m.chg.toFixed(2)+'%'}</span></div>`).join('')||'<div class="tick"><small>MACRO SIGNALS</small><span class="fl">awaiting data</span></div>';
  // stacking
- const cv2=D&&D.convergence||[];$('#stack').innerHTML=cv2.length?cv2.map((r,i)=>`<div class="st" data-i="${i}"><div class="h">${esc(r.name)}<span>${r.count} LAYERS</span></div><div class="chips">${Object.entries(r.layers).sort((a,b)=>b[1]-a[1]).map(([k,n])=>`<span class="chip"><i style="background:${COL[k]}"></i>${LAY.find(l=>l.id===k).n.split(' ')[0]} · ${n}</span>`).join('')}</div></div>`).join(''):'<div class="fi" style="color:var(--text-muted)">No regions with stacked layers right now.</div>';
- document.querySelectorAll('.st').forEach(e=>e.onclick=()=>{const r=cv2[+e.dataset.i];flyTo(r.lat,r.lon);setSel('all');openPop({name:r.name,lat:r.lat,lon:r.lon,stack:r})});
+ INT=intersections();const cv2=INT;$('#stack').innerHTML=cv2.length?cv2.map((r,i)=>`<div class="st" data-i="${i}"><div class="h">${esc(r.name)}<span>${r.count}-LAYER INTERSECTION</span></div><div class="chips">${Object.entries(r.layers).sort((a,b)=>b[1]-a[1]).map(([k,n])=>`<span class="chip"><i style="background:${COL[k]}"></i>${LAY.find(l=>l.id===k).n.split(' ')[0]} · ${n}</span>`).join('')}</div></div>`).join(''):`<div class="fi" style="color:var(--text-muted)">${act.size===1?'Pick a second layer to see where they intersect.':'No intersections between these layers in the last 24h.'}</div>`;
+ document.querySelectorAll('.st').forEach(e=>e.onclick=()=>{const r=cv2[+e.dataset.i];flyTo(r.lat,r.lon);openPop({name:r.name,lat:r.lat,lon:r.lon,stack:r})});
  // feed
  feed();
  // sources
  const S=D&&D.sources||{},names={cisa_ics:'CISA ICS',cisa_kev:'CISA KEV',ioda:'IODA outages',gdacs:'GDACS',markets:'Markets',gdelt:'GDELT volume'};LAY.forEach(l=>{names['gdelt_'+l.id]='GDELT·'+l.s;names['news_'+l.id]='News·'+l.s});
  const ks=Object.keys(S);$('#src').innerHTML=ks.map(k=>`<span class="${S[k]?'ok':'no'}">${names[k]||k}</span>`).join('')||'<span>awaiting first pull</span>';$('#srcn').textContent=ks.length?ks.filter(k=>S[k]).length+'/'+ks.length+' ONLINE':'';
  // layer label
- const L=LAY.find(l=>l.id===sel);$('#layt').textContent=L?L.n.toUpperCase():'ALL LAYERS';$('#laysw').style.background=L?COL[L.id]:'#000';
- $('#layd').textContent=L?L.d+(D&&D.layers[L.id]&&D.layers[L.id].note?' '+D.layers[L.id].note+'.':''):'Every flashpoint from the last 24 hours. Dashed rings mark regions where several layers stack up.';
- $('#allbtn').classList.toggle('on',sel==='all')}
-function feed(){const hs=(D&&D.hotspots||[]).filter(h=>sel==='all'||h.layer===sel).sort((a,b)=>b.n-a.n),items=[];
+ const A=[...act].map(k=>LAY.find(l=>l.id===k)),L=A.length===1?A[0]:null;
+ $('#layt').textContent=L?L.n.toUpperCase():A.length?A.length+' LAYERS OVERLAID':'ALL LAYERS';
+ $('#laysw').style.background=L?COL[L.id]:A.length?`conic-gradient(${A.map((l,i)=>`${COL[l.id]} ${i/A.length*100}% ${(i+1)/A.length*100}%`).join(',')})`:'#000';
+ $('#layd').textContent=L?L.d+(D&&D.layers[L.id]&&D.layers[L.id].note?' '+D.layers[L.id].note+'.':'')+' Tap more layers to overlay them.':A.length?A.map(l=>l.s).join(' + ')+'. Light-blue glow marks where their zones intersect in the last 24h.':'Every flashpoint zone from the last 24 hours — brighter means more recent. Tap layers to overlay them; light-blue glow marks intersections.';
+ $('#allbtn').classList.toggle('on',!act.size)}
+function feed(){const hs=(D&&D.hotspots||[]).filter(h=>on(h.layer)).sort((a,b)=>b.n-a.n),items=[];
  for(const h of hs)for(const it of h.items||[]){if(items.length>=40)break;items.push({...it,layer:h.layer,place:h.name})}
- $('#feedt').textContent=(sel==='all'?'FLASHPOINTS':LAY.find(l=>l.id===sel).n.toUpperCase())+' · 24H';
+ $('#feedt').textContent=(act.size===1?LAY.find(l=>act.has(l.id)).n.toUpperCase():act.size?act.size+' LAYERS':'FLASHPOINTS')+' · 24H';
  $('#feed').innerHTML=items.length?items.map(i=>`<div class="fi"><div class="m"><i style="background:${COL[i.layer]}"></i>${esc(i.place.toUpperCase())} · ${esc(i.src||'')}</div><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.title)}</a></div>`).join(''):'<div class="fi" style="color:var(--text-muted)">No geolocated flashpoints for this layer yet.</div>';
  const dv=D&&D.layers.narrative&&D.layers.narrative.divergence;
- $('#divbox').innerHTML=(sel==='narrative'&&dv)?`<div class="fi"><div class="m">HOW MEDIA BLOCS HEADLINE CONFLICT NEWS (7D) · SPREAD ${dv.spread}</div><div class="div">${dv.blocs.map(b=>`<div class="r"><span>${esc(b.bloc)}</span><div class="t"><i style="left:${50+Math.max(-48,Math.min(48,b.tone*14))}%"></i></div><span style="text-align:right">${b.tone}</span></div>`).join('')}</div><div class="m" style="margin-top:6px;justify-content:space-between"><span>◀ MORE NEGATIVE</span><span>MORE POSITIVE ▶</span></div></div>`:''}
-function setSel(id){sel=id;closePop();render()}
+ $('#divbox').innerHTML=(act.has('narrative')&&dv)?`<div class="fi"><div class="m">HOW MEDIA BLOCS HEADLINE CONFLICT NEWS (7D) · SPREAD ${dv.spread}</div><div class="div">${dv.blocs.map(b=>`<div class="r"><span>${esc(b.bloc)}</span><div class="t"><i style="left:${50+Math.max(-48,Math.min(48,b.tone*14))}%"></i></div><span style="text-align:right">${b.tone}</span></div>`).join('')}</div><div class="m" style="margin-top:6px;justify-content:space-between"><span>◀ MORE NEGATIVE</span><span>MORE POSITIVE ▶</span></div></div>`:''}
+function toggle(id){act.has(id)?act.delete(id):act.add(id);closePop();render()}
+function setSel(id){act.clear();if(id&&id!=='all')act.add(id);closePop();render()}
 $('#allbtn').onclick=()=>setSel('all');
 
 /* ---------- globe ---------- */
@@ -229,18 +244,29 @@ function drawGlobe(c,W,H,t,opt={}){const R=Math.min(W,H)*.42*(opt.zoom||zoom),X=
  c.fillStyle=opt.dark?'#3a4148':'#cfd2d8';c.strokeStyle=opt.dark?'#4a525a':'#b9bdc4';c.lineWidth=.6;
  for(const p of LAND){c.beginPath();let vis=0;for(let i=0;i<p.length;i+=2){let[x,y,z]=proj(p[i+1],p[i],R,X,Y);if(z<0){const dx=x-X,dy=y-Y,m=Math.hypot(dx,dy)||1;x=X+dx/m*R;y=Y+dy/m*R}else vis=1;i?c.lineTo(x,y):c.moveTo(x,y)}if(vis){c.fill();c.stroke()}}
  c.restore();c.strokeStyle=opt.dark?'#4a525a':'#c7cad0';c.lineWidth=1.2;c.beginPath();c.arc(X,Y,R,0,7);c.stroke();
- // convergence rings
  const out=[];if(!D)return out;
- if(sel==='all'||opt.all)for(const r of D.convergence||[]){const[x,y,z]=proj(r.lat,r.lon,R,X,Y);if(z<.05)continue;const rr=14+r.count*7+Math.sin(t*2)*2;c.save();c.setLineDash([4,4]);c.strokeStyle=opt.dark?'rgba(255,255,255,.75)':'rgba(29,29,31,.7)';c.lineWidth=1.4;c.beginPath();c.arc(x,y,rr,0,7);c.stroke();c.restore();
-  c.font='800 10px "IBM Plex Mono",monospace';c.fillStyle=opt.dark?'#fff':'#1d1d1f';c.textAlign='center';c.fillText(r.count+'× '+r.name.toUpperCase(),x,y-rr-5)}
- // hotspots
- const hs=(D.hotspots||[]).filter(h=>(sel==='all'||opt.all||h.layer===sel)&&!h.global);
- const placed={};for(const h of hs){const[x0,y0,z]=proj(h.lat,h.lon,R,X,Y);if(z<.02)continue;const k=h.name;const off=(placed[k]=(placed[k]||0)+1)-1;const a=off*1.3,x=x0+(off?Math.cos(a)*9:0),y=y0+(off?Math.sin(a)*9:0);
-  const col=COL[h.layer],s=4+h.intensity*7,ph=(((t*1.4+h.lat)%1)+1)%1;c.globalAlpha=Math.min(1,z*3);
-  c.strokeStyle=col;c.lineWidth=1.5;c.globalAlpha*=1-ph;c.beginPath();c.arc(x,y,s+ph*16,0,7);c.stroke();c.globalAlpha=Math.min(1,z*3);
-  c.fillStyle=col;c.beginPath();c.arc(x,y,s*.62,0,7);c.fill();c.strokeStyle='#fff';c.lineWidth=1.5;c.stroke();c.globalAlpha=1;
-  out.push({x,y,r:Math.max(14,s+4),h});
-  if(!opt.nolabel&&(sel!=='all'||h.intensity>.7)&&z>.25){c.font='700 10.5px "Plus Jakarta Sans",sans-serif';c.textAlign='left';c.fillStyle=opt.dark?'#e8e8ea':'#1d1d1f';c.fillText(h.name,x+s+4,y+3.5)}}
+ // zones: soft colored areas per flashpoint, foreshortened onto the sphere; newer = brighter
+ const hs=(D.hotspots||[]).filter(h=>on(h.layer)&&!h.global).sort((a,b)=>rec(a)-rec(b));
+ c.save();c.beginPath();c.arc(X,Y,R,0,7);c.clip();
+ for(const h of hs){const[x,y,z]=proj(h.lat,h.lon,R,X,Y);if(z<.02)continue;const col=COL[h.layer],rc=rec(h),rz=R*(.05+.075*h.intensity),fa=Math.min(1,z*3);
+  c.save();c.translate(x,y);c.rotate(Math.atan2(y-Y,x-X));c.scale(Math.max(.15,z),1);c.globalAlpha=fa;
+  const g=c.createRadialGradient(0,0,0,0,0,rz);g.addColorStop(0,rgba(col,.22+.55*rc));g.addColorStop(.55,rgba(col,.12+.3*rc));g.addColorStop(1,rgba(col,0));
+  c.fillStyle=g;c.beginPath();c.arc(0,0,rz,0,7);c.fill();
+  c.strokeStyle=rgba(col,.25+.45*rc);c.lineWidth=1.1;c.beginPath();c.arc(0,0,rz*.78,0,7);c.stroke();
+  c.fillStyle=rgba(col,.5+.5*rc);c.beginPath();c.arc(0,0,1.6+2.4*rc,0,7);c.fill();c.restore();
+  out.push({x,y,r:Math.max(12,rz*.7*Math.max(.4,z)),h,z})}
+ c.restore();
+ // intersections: light-blue glow where zones of different layers overlap
+ const ints=opt.ints||INT;
+ for(const r of ints){const[x,y,z]=proj(r.lat,r.lon,R,X,Y);if(z<.05)continue;const pu=.85+.15*Math.sin(t*2.2+r.lat),rr=R*(.06+.018*r.count)*pu;
+  c.save();c.globalAlpha=Math.min(1,z*2.5);c.globalCompositeOperation=opt.dark?'lighter':'source-over';
+  const g=c.createRadialGradient(x,y,rr*.15,x,y,rr*1.25);g.addColorStop(0,'rgba(125,211,252,.55)');g.addColorStop(.5,'rgba(125,211,252,.28)');g.addColorStop(1,'rgba(125,211,252,0)');c.fillStyle=g;c.beginPath();c.arc(x,y,rr*1.25,0,7);c.fill();
+  c.globalCompositeOperation='source-over';c.strokeStyle='rgba(56,189,248,.95)';c.lineWidth=1.8;c.shadowColor='#7dd3fc';c.shadowBlur=12;c.beginPath();c.arc(x,y,rr*.62,0,7);c.stroke();c.shadowBlur=0;
+  if(act.size||r.count>=3){c.font='800 10px "IBM Plex Mono",monospace';c.fillStyle=opt.dark?'#e0f2fe':'#0369a1';c.textAlign='center';c.fillText(r.count+'× '+r.name.toUpperCase(),x,y-rr*.62-6)}c.restore();
+  out.push({x,y,r:Math.max(16,rr*.62),int:r,z})}
+ // labels
+ if(!opt.nolabel){const seen={};for(const o of out){if(o.int||o.z<.3||seen[o.h.name]||out.some(q=>q.int&&Math.hypot(q.x-o.x,q.y-o.y)<q.r+10))continue;if(!(act.size||o.h.intensity>.7))continue;seen[o.h.name]=1;
+  c.font='700 10.5px "Plus Jakarta Sans",sans-serif';c.textAlign='left';c.fillStyle=opt.dark?'#e8e8ea':'#1d1d1f';c.fillText(o.h.name,o.x+8,o.y+3.5)}}
  return out}
 function size(){const r=devicePixelRatio||1,b=cv.getBoundingClientRect();cv.width=b.width*r;cv.height=b.height*r;cx.setTransform(r,0,0,r,0,0)}
 addEventListener('resize',size);
@@ -256,14 +282,14 @@ cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);ptrs.set
 cv.addEventListener('pointermove',e=>{if(!ptrs.has(e.pointerId))return;ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
  if(ptrs.size>=2){const p=[...ptrs.values()];zoom=Math.max(.7,Math.min(3.5,z0*Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)/pinch0));return}
  if(drag){const dx=e.clientX-drag.x,dy=e.clientY-drag.y;drag.mv+=Math.abs(dx)+Math.abs(dy);rotY+=dx*.006/zoom;rotX=Math.max(-1.4,Math.min(1.4,rotX+dy*.006/zoom));drag.x=e.clientX;drag.y=e.clientY;spin=false}});
-function up(e){ptrs.delete(e.pointerId);if(drag&&drag.mv<6&&ptrs.size===0){const b=cv.getBoundingClientRect(),x=e.clientX-b.left,y=e.clientY-b.top;let best=null,bd=1e9;for(const h of hits){const d=Math.hypot(h.x-x,h.y-y);if(d<h.r&&d<bd){bd=d;best=h}}
-  if(best){const same=hits.filter(h=>h.h.name===best.h.name).map(h=>h.h);openPop({name:best.h.name,lat:best.h.lat,lon:best.h.lon,items:same})}else closePop()}
+function up(e){ptrs.delete(e.pointerId);if(drag&&drag.mv<6&&ptrs.size===0){const b=cv.getBoundingClientRect(),x=e.clientX-b.left,y=e.clientY-b.top;let best=null,bd=1e9;for(const h of hits){const d=Math.hypot(h.x-x,h.y-y)-(h.int?6:0);if(d<h.r&&d<bd){bd=d;best=h}}
+  if(best&&best.int){openPop({name:best.int.name,lat:best.int.lat,lon:best.int.lon,stack:best.int})}else if(best){const same=hits.filter(h=>h.h.name===best.h.name).map(h=>h.h);openPop({name:best.h.name,lat:best.h.lat,lon:best.h.lon,items:same})}else closePop()}
  if(ptrs.size===0)drag=null}
 cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
 cv.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.7,Math.min(3.5,zoom*Math.exp(-e.deltaY*.0015)))},{passive:false});
-function openPop(o){popHot=o;const p=$('#pop');const groups=o.stack?(D.hotspots||[]).filter(h=>h.name===o.name):o.items;
+function openPop(o){popHot=o;const p=$('#pop');const groups=o.stack?o.stack.members:o.items;
  const tags=[...new Set(groups.map(h=>h.layer))];
- p.innerHTML=`<h3>${esc(o.name)}<button onclick="closePop()">✕</button></h3><div class="tags">${tags.map(k=>`<span class="tagc" style="background:${COL[k]}">${LAY.find(l=>l.id===k).n.toUpperCase()}</span>`).join('')}</div><ul>${groups.flatMap(h=>(h.items||[]).map(i=>`<li><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.title)}</a><small>${esc(i.src||'')} · ${LAY.find(l=>l.id===h.layer).n}</small></li>`)).join('')}</ul>`;
+ p.innerHTML=`${o.stack?`<div style="font:800 10px var(--font-mono);letter-spacing:.08em;color:#0284c7;margin-bottom:2px">${o.stack.count}-LAYER INTERSECTION · 24H</div>`:''}<h3>${esc(o.name)}<button onclick="closePop()">✕</button></h3><div class="tags">${tags.map(k=>`<span class="tagc" style="background:${COL[k]}">${LAY.find(l=>l.id===k).n.toUpperCase()}</span>`).join('')}</div><ul>${groups.flatMap(h=>(h.items||[]).map(i=>`<li><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.title)}</a><small>${esc(i.src||'')} · ${LAY.find(l=>l.id===h.layer).n}</small></li>`)).join('')}</ul>`;
  p.style.display='block';placePop()}
 function placePop(){const p=$('#pop'),b=cv.getBoundingClientRect(),R=Math.min(b.width,b.height)*.42*zoom,[x,y,z]=proj(popHot.lat,popHot.lon,R,b.width/2,b.height/2);
  if(z<0){p.style.opacity=.35}else p.style.opacity=1;const w=p.offsetWidth,h=p.offsetHeight;p.style.left=Math.max(8,Math.min(b.width-w-8,x-w/2))+'px';p.style.top=Math.max(8,Math.min(b.height-h-8,y+18))+'px'}
@@ -276,9 +302,9 @@ function brandFrame(c,W,H,t,story){c.fillStyle='#1a1e22';c.fillRect(0,0,W,H);con
  c.font=`600 ${24*s}px "IBM Plex Mono"`;c.fillStyle='#9ea3a8';const u=D?new Date(D.updated):new Date();c.fillText(`8-LAYER SYSTEMS READOUT · ${u.toISOString().slice(0,10)} ${u.toISOString().slice(11,16)} UTC`,pad,pad+132*s);
  // globe card
  const gy=pad+170*s,gh=story?880*s:500*s;c.fillStyle='#fff';rr(c,pad,gy,W-pad*2,gh,28*s);c.fill();
- c.save();c.translate(pad,gy);rr(c,0,0,W-pad*2,gh,28*s);c.clip();const L=LAY.find(l=>l.id===sel);
+ c.save();c.translate(pad,gy);rr(c,0,0,W-pad*2,gh,28*s);c.clip();const A=[...act].map(k=>LAY.find(l=>l.id===k)),L=A.length===1?A[0]:null;
  drawGlobe(c,W-pad*2,gh,t,{bg:1,zoom:zoom*1.02,nolabel:0});
- c.fillStyle='rgba(255,255,255,.92)';rr(c,20*s,20*s,520*s,64*s,16*s);c.fill();c.fillStyle=L?COL[L.id]:'#000';c.beginPath();c.arc(48*s,52*s,9*s,0,7);c.fill();c.fillStyle='#1d1d1f';c.font=`800 ${24*s}px "Plus Jakarta Sans"`;c.fillText(L?L.n.toUpperCase():'ALL LAYERS · 24H',68*s,61*s);c.restore();
+ const ox=A.length>1?(40+A.length*9+14)*s:68*s;const lt=L?L.n.toUpperCase():A.length?A.length+' LAYERS · '+INT.length+' INTERSECTIONS':'ALL LAYERS · 24H';c.font=`800 ${24*s}px "Plus Jakarta Sans"`;c.fillStyle='rgba(255,255,255,.92)';rr(c,20*s,20*s,ox-20*s+c.measureText(lt).width+24*s,64*s,16*s);c.fill();if(A.length>1)A.forEach((l,i)=>{c.fillStyle=COL[l.id];c.beginPath();c.arc(40*s+i*9*s,52*s,9*s,0,7);c.fill()});else{c.fillStyle=L?COL[L.id]:'#000';c.beginPath();c.arc(48*s,52*s,9*s,0,7);c.fill()}c.fillStyle='#1d1d1f';c.fillText(lt,ox,61*s);c.restore();
  // readout
  let y=gy+gh+50*s;c.fillStyle='#fff';c.font=`700 ${22*s}px "IBM Plex Mono"`;c.fillStyle='#9ea3a8';c.fillText('LAYER',pad,y);c.textAlign='right';c.fillText(`COMPOSITE ${D?D.composite:'—'}`,W-pad,y);c.textAlign='left';y+=18*s;
  const rows=LAY.map(l=>({l,L:D&&D.layers[l.id]||{}}));const rh=story?74*s:50*s;
@@ -292,14 +318,14 @@ function save(blob,name){const a=document.createElement('a');a.href=URL.createOb
 function stamp(){return (D?D.updated:new Date().toISOString()).slice(0,16).replace(/[:T]/g,'')}
 async function fontsIn(){try{await Promise.all(['800 40px "Plus Jakarta Sans"','700 30px "Plus Jakarta Sans"','600 20px "IBM Plex Mono"','700 20px "IBM Plex Mono"'].map(f=>document.fonts.load(f)))}catch(e){}}
 async function shot(story){await fontsIn();const W=1080,H=story?1920:1350,c=document.createElement('canvas');c.width=W;c.height=H;brandFrame(c.getContext('2d'),W,H,performance.now()/1000,story);
- c.toBlob(b=>save(b,`global-atlas-${sel}-${stamp()}${story?'-story':''}.png`),'image/png')}
+ c.toBlob(b=>save(b,`global-atlas-${selKey()}-${stamp()}${story?'-story':''}.png`),'image/png')}
 $('#cap1').onclick=()=>shot(false);$('#cap2').onclick=()=>shot(true);
 $('#cap3').onclick=async()=>{const btn=$('#cap3');if(!window.MediaRecorder){alert('Video recording is not supported in this browser.');return}
  await fontsIn();const W=1080,H=1350,c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d');
  const types=['video/mp4;codecs=avc1','video/mp4','video/webm;codecs=vp9','video/webm'],type=types.find(t=>MediaRecorder.isTypeSupported(t))||'';
  const st=c.captureStream(30),rec=new MediaRecorder(st,type?{mimeType:type,videoBitsPerSecond:8e6}:{}),chunks=[];rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
  const r0=rotY,sp=spin;spin=false;btn.disabled=true;let t0=performance.now();
- rec.onstop=()=>{rotY=r0;spin=sp;btn.disabled=false;btn.textContent='Record 8s spin · video';const ext=(rec.mimeType||type).includes('mp4')?'mp4':'webm';save(new Blob(chunks,{type:rec.mimeType||type}),`global-atlas-${sel}-${stamp()}.${ext}`)};
+ rec.onstop=()=>{rotY=r0;spin=sp;btn.disabled=false;btn.textContent='Record 8s spin · video';const ext=(rec.mimeType||type).includes('mp4')?'mp4':'webm';save(new Blob(chunks,{type:rec.mimeType||type}),`global-atlas-${selKey()}-${stamp()}.${ext}`)};
  rec.start(250);(function tick(){const el=(performance.now()-t0)/1000;rotY=r0-el*(Math.PI*2/8);brandFrame(x,W,H,el,false);btn.textContent=`Recording… ${Math.max(0,8-el).toFixed(1)}s`;if(el<8)requestAnimationFrame(tick);else rec.stop()})()};
 
 size();requestAnimationFrame(frame);load();

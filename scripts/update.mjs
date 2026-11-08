@@ -195,7 +195,7 @@ for (const L of LAYERS) {
   for (const a of g.arts) {
     const p = locate(a.title || ''); if (!p) continue;
     const k = p.name; byPlace[k] = byPlace[k] || { ...p, layer: L.id, n: 0, items: [] };
-    byPlace[k].n++; if (byPlace[k].items.length < 4) byPlace[k].items.push({ title: a.title, url: a.url, src: a.domain, t: a.seendate });
+    byPlace[k].n++; const at = a.t || Date.parse(a.seendate) || 0; byPlace[k].last = Math.max(byPlace[k].last || 0, at); if (byPlace[k].items.length < 4) byPlace[k].items.push({ title: a.title, url: a.url, src: a.domain, t: at || undefined });
   }
   const spots = Object.values(byPlace).sort((a, b) => b.n - a.n).slice(0, 14);
   const top = spots[0]?.n || 1;
