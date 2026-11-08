@@ -100,10 +100,13 @@ async function googleNews(q, ed = 'US', extra = '') {
   return rssItems(x).map(s => { const t = tag(s, 'title'), src = tag(s, 'source'); return { title: src && t.endsWith(' - ' + src) ? t.slice(0, -(src.length + 3)) : t, url: tag(s, 'link'), domain: src, t: Date.parse(tag(s, 'pubDate')) }; })
     .filter(a => a.t && now - a.t < (extra ? 7 : 1) * 864e5);
 }
+let gdeltDown = 0; // circuit breaker: GDELT rate-limits GitHub runners most of the time
 async function gdeltVol(L) {
+  if (gdeltDown >= 2) return null;
   const q = encodeURIComponent(L.q + ' sourcelang:english');
   const vol = parseTL(await get(GD + q + '&mode=timelinevolraw&timespan=8d', { wait: 9000, tries: 3, backoff: 20000 }));
-  const V = split24(vol); if (!V.a.length || !V.b.length) return null;
+  const V = split24(vol); if (!V.a.length || !V.b.length) { gdeltDown++; return null; }
+  gdeltDown = 0;
   const sum = a => a.reduce((s, p) => s + p.v, 0), days = Math.max(1, (V.b[V.b.length - 1].t - V.b[0].t) / 864e5);
   return { vol24: sum(V.a), volBase: sum(V.b) / days };
 }
