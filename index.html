@@ -207,7 +207,7 @@ function feed(){const hs=(D&&D.hotspots||[]).filter(h=>sel==='all'||h.layer===se
  $('#feedt').textContent=(sel==='all'?'FLASHPOINTS':LAY.find(l=>l.id===sel).n.toUpperCase())+' · 24H';
  $('#feed').innerHTML=items.length?items.map(i=>`<div class="fi"><div class="m"><i style="background:${COL[i.layer]}"></i>${esc(i.place.toUpperCase())} · ${esc(i.src||'')}</div><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.title)}</a></div>`).join(''):'<div class="fi" style="color:var(--text-muted)">No geolocated flashpoints for this layer yet.</div>';
  const dv=D&&D.layers.narrative&&D.layers.narrative.divergence;
- $('#divbox').innerHTML=(sel==='narrative'&&dv)?`<div class="fi"><div class="m">TONE OF CONFLICT COVERAGE BY MEDIA BLOC · SPREAD ${dv.spread}</div><div class="div">${dv.blocs.map(b=>`<div class="r"><span>${esc(b.bloc)}</span><div class="t"><i style="left:${50+Math.max(-48,Math.min(48,b.tone*7))}%"></i></div><span style="text-align:right">${b.tone}</span></div>`).join('')}</div><div class="m" style="margin-top:6px;justify-content:space-between"><span>◀ MORE NEGATIVE</span><span>MORE POSITIVE ▶</span></div></div>`:''}
+ $('#divbox').innerHTML=(sel==='narrative'&&dv)?`<div class="fi"><div class="m">HOW MEDIA BLOCS HEADLINE CONFLICT NEWS (7D) · SPREAD ${dv.spread}</div><div class="div">${dv.blocs.map(b=>`<div class="r"><span>${esc(b.bloc)}</span><div class="t"><i style="left:${50+Math.max(-48,Math.min(48,b.tone*14))}%"></i></div><span style="text-align:right">${b.tone}</span></div>`).join('')}</div><div class="m" style="margin-top:6px;justify-content:space-between"><span>◀ MORE NEGATIVE</span><span>MORE POSITIVE ▶</span></div></div>`:''}
 function setSel(id){sel=id;closePop();render()}
 $('#allbtn').onclick=()=>setSel('all');
 

@@ -92,12 +92,12 @@ function split24(pts) {
 const NEG = /\b(kill|killed|dead|deaths|attack|attacks|strike|strikes|war|crisis|collapse|shortage|famine|outage|blackout|threat|warn|warning|surge|soar|explosion|missile|drone|hack|hacked|breach|sanction|emergency|severe|fear|clash|clashes|disrupt|disruption|cut|seized|jamming|shutdown|riot|protest|flee|starv)/gi;
 const POS = /\b(restor|resum|ease|eases|eased|recover|ceasefire|deal|agreement|reopen|reopens|calm|aid|relief|repair|repaired|stabil)/gi;
 const lexTone = arr => { if (!arr.length) return null; let n = 0, p = 0; for (const a of arr) { n += ((a.title || '').match(NEG) || []).length; p += ((a.title || '').match(POS) || []).length; } return +(-((n - p) / arr.length) * 3).toFixed(2); };
-async function googleNews(q, ed = 'US') {
+async function googleNews(q, ed = 'US', extra = '') {
   const lang = { US: 'en-US', GB: 'en-GB', IN: 'en-IN', AU: 'en-AU', SG: 'en-SG', ZA: 'en-ZA' }[ed] || 'en-US';
-  const x = await get(`https://news.google.com/rss/search?q=${encodeURIComponent('(' + q + ') when:1d')}&hl=${lang}&gl=${ed}&ceid=${ed}:en`, { type: 'text', tries: 2, wait: 1200 });
+  const x = await get(`https://news.google.com/rss/search?q=${encodeURIComponent('(' + q + ')' + (extra ? ' (' + extra + ')' : '') + ' when:7d')}&hl=${lang}&gl=${ed}&ceid=${ed}:en`, { type: 'text', tries: 2, wait: 1200 });
   if (!x) return null;
   return rssItems(x).map(s => { const t = tag(s, 'title'), src = tag(s, 'source'); return { title: src && t.endsWith(' - ' + src) ? t.slice(0, -(src.length + 3)) : t, url: tag(s, 'link'), domain: src, t: Date.parse(tag(s, 'pubDate')) }; })
-    .filter(a => a.t && now - a.t < 864e5);
+    .filter(a => a.t && now - a.t < (extra ? 7 : 1) * 864e5);
 }
 async function gdeltVol(L) {
   const q = encodeURIComponent(L.q + ' sourcelang:english');
@@ -215,11 +215,15 @@ for (const [label, sc] of BLOCS) {
   const j = sources.gdelt ? await get(GD + encodeURIComponent(LAYERS[0].q + ' sourcecountry:' + sc) + '&mode=timelinetone&timespan=24h', { wait: 9000, tries: 2, backoff: 15000 }) : null;
   const pts = parseTL(j); if (pts.length) div.push({ bloc: label, tone: +(pts.reduce((s, p) => s + p.v, 0) / pts.length).toFixed(2) });
 }
-if (div.length < 2) { div.length = 0; for (const ed of ['US', 'GB', 'IN', 'AU', 'SG', 'ZA']) { const a = await googleNews(GN.military, ed); const t = a && lexTone(a); if (t != null) div.push({ bloc: ed === 'GB' ? 'UK' : ed, tone: t }); } }
+if (div.length < 2) { div.length = 0;
+  const MB = [['Western wires', 'site:reuters.com OR site:apnews.com OR site:bbc.com OR site:bbc.co.uk'], ['Russian state', 'site:rt.com OR site:tass.com OR site:sputnikglobe.com'],
+    ['Chinese state', 'site:globaltimes.cn OR site:cgtn.com OR site:xinhuanet.com OR site:chinadaily.com.cn'], ['Gulf / Arab', 'site:aljazeera.com OR site:arabnews.com OR site:thenationalnews.com'],
+    ['Indian', 'site:thehindu.com OR site:indiatimes.com OR site:ndtv.com OR site:hindustantimes.com'], ['Iranian state', 'site:presstv.ir OR site:tehrantimes.com']];
+  for (const [bloc, sites] of MB) { const a = await googleNews(GN.military + ' OR war OR conflict', 'US', sites); const t = a && a.length >= 3 ? lexTone(a) : null; if (t != null) div.push({ bloc, tone: t, n: a.length }); } }
 if (div.length >= 2) {
   const tones = div.map(d => d.tone), spread = Math.max(...tones) - Math.min(...tones);
   const n = layers.narrative; n.divergence = { spread: +spread.toFixed(2), blocs: div };
-  n.index = Math.round(.6 * n.index + 40 * clamp(spread / 5, 0, 1));
+  n.index = Math.round(.55 * n.index + 45 * clamp(spread / 2.5, 0, 1));
   n.note = `Tone spread across ${div.length} media blocs: ${spread.toFixed(1)} pts`;
 }
 
