@@ -2,6 +2,7 @@
 // Pulls open-source signals, scores 8 stress layers, finds regions where layers stack up,
 // and writes data/latest.json + data/history.json for the static site.
 import fs from 'node:fs/promises';
+import { backfill, archiveDay, buildArc, markets, hardSignals, signalCheck, fearGauge, tier } from './extra.mjs';
 
 const UA = 'GlobalAtlas/1.0 (+https://github.com/starfirelockanddoorbackup-byte/global-atlas)';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -136,7 +137,7 @@ async function ioda() {
   if (!arr) return null;
   const byC = {};
   for (const e of arr) { const ent = e.entity || e.location || {}; const name = ent.name || e.location_name; if (!name) continue; byC[name] = (byC[name] || 0) + 1; }
-  return { countries: Object.entries(byC).map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n) };
+  return { events: arr.length, countries: Object.entries(byC).map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n) };
 }
 async function gdacs() {
   const x = await get('https://www.gdacs.org/xml/rss.xml', { type: 'text' });
@@ -145,27 +146,9 @@ async function gdacs() {
     lat: parseFloat(tag(s, 'geo:lat')), lon: parseFloat(tag(s, 'geo:long')), t: Date.parse(tag(s, 'pubDate')), country: tag(s, 'gdacs:country') }))
     .filter(e => isFinite(e.lat) && isFinite(e.lon));
 }
-async function macro() {
-  const SYM = [['WTI Oil', 'CL=F', 'cl.f'], ['Brent', 'BZ=F', 'cb.f'], ['Gold', 'GC=F', 'gc.f'], ['VIX', '^VIX', 'vi.f'], ['Dollar', 'DX-Y.NYB', 'dx.f'], ['Wheat', 'ZW=F', 'zw.f'], ['Shipping (BDRY)', 'BDRY', 'bdry.us']];
-  const out = [];
-  for (const [name, y, s] of SYM) {
-    let last = null, prev = null;
-    const j = await get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(y)}?range=7d&interval=1d`, { tries: 1 });
-    const c = j?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(v => v != null);
-    if (c && c.length >= 2) { last = c[c.length - 1]; prev = c[c.length - 2]; }
-    else {
-      const csv = await get(`https://stooq.com/q/d/l/?s=${s}&i=d`, { type: 'text', tries: 1 });
-      const rows = (csv || '').trim().split('\n').slice(1).map(r => r.split(',')).filter(r => r.length > 4);
-      if (rows.length >= 2) { last = +rows[rows.length - 1][4]; prev = +rows[rows.length - 2][4]; }
-    }
-    out.push({ name, last, chg: last != null && prev ? (last - prev) / prev * 100 : null });
-  }
-  return out;
-}
-
 /* ---------------- run ---------------- */
 log('GLOBAL ATLAS telemetry pull');
-const [ics, kev, outages, disasters, mkts] = [await cisaICS(), await cisaKEV(), await ioda(), await gdacs(), await macro()];
+const [ics, kev, outages, disasters, mkts] = [await cisaICS(), await cisaKEV(), await ioda(), await gdacs(), await markets(get)];
 sources.cisa_ics = !!ics; sources.cisa_kev = !!kev; sources.ioda = !!outages; sources.gdacs = !!disasters; sources.markets = mkts.some(m => m.last != null);
 log('structured', JSON.stringify(sources));
 
@@ -240,11 +223,36 @@ for (const [id, L] of Object.entries(layers)) {
   L.delta = prev != null ? L.index - prev : null;
   L.trend = L.delta == null ? 'NEW' : L.delta >= 3 ? 'WORSE' : L.delta <= -3 ? 'BETTER' : 'STEADY';
 }
-history.push({ t: now.toISOString(), n: counts, idx: Object.fromEntries(Object.entries(layers).map(([k, v]) => [k, v.index])) });
+// long arc + hard telemetry + signal check
+log('backfill');
+const B = await backfill(get, log, now);
+sources.portwatch = !!B.portwatch; sources.dshield = !!B.dshield; sources.gdacs_archive = !!B.gdacs; sources.ioda_history = !!B.ioda;
+const spread = layers.narrative.divergence ? layers.narrative.divergence.spread : null;
+const H = hardSignals(B, now, history, { outageEvents: outages ? outages.events : null, spread });
+const signal = signalCheck(layers, mkts, H), fear = fearGauge(mkts);
+for (const [id, L] of Object.entries(layers)) L.tier = tier(L.index);
+let prev = null; try { prev = JSON.parse(await fs.readFile(new URL('../data/latest.json', import.meta.url))); } catch {}
+const NM = { military: 'Military', maritime: 'Maritime & Supply', cyber: 'Cyber & ICS', narrative: 'Narrative', power: 'Power & Grid', strain: 'Subsistence & Strain', water: 'Water', telecom: 'Telecom & Subsea' };
+const moves = [];
+if (prev && prev.layers) {
+  const RANK = { WATCH: 0, ELEVATED: 1, HIGH: 2, CRITICAL: 3 };
+  for (const [id, L] of Object.entries(layers)) { const pt = prev.layers[id]?.tier || (prev.layers[id] ? tier(prev.layers[id].index) : null);
+    if (pt && pt !== L.tier) moves.push({ kind: 'tier', layer: id, dir: RANK[L.tier] > RANK[pt] ? 1 : -1, txt: `${NM[id]}: ${pt} → ${L.tier}` }); }
+  for (const [id, S] of Object.entries(signal)) { const ps = prev.signal?.[id]?.read;
+    if (ps !== S.read && ['CONFIRMED', 'QUIET SIGNAL', 'CONTRADICTED'].includes(S.read)) moves.push({ kind: 'signal', layer: id, dir: S.read === 'CONTRADICTED' ? 0 : 1, txt: `${NM[id]}: ${S.read.toLowerCase()}${S.read === 'QUIET SIGNAL' ? ' (markets/data moving, headlines quiet)' : S.read === 'CONFIRMED' ? ' (headlines backed by markets/data)' : ' (headlines up, data down)'}` }); }
+  const pc = new Set((prev.convergence || []).map(r => r.name));
+  for (const r of convergence) if (!pc.has(r.name)) moves.push({ kind: 'stack', lat: r.lat, lon: r.lon, name: r.name, dir: 1, txt: `Now stacking: ${r.name} (${r.count} layers)` });
+  const ph = new Set((prev.hotspots || []).map(h => h.name + '|' + h.layer));
+  hotspots.filter(h => !h.global && h.intensity >= .5 && !ph.has(h.name + '|' + h.layer)).slice(0, 5).forEach(h => moves.push({ kind: 'new', layer: h.layer, lat: h.lat, lon: h.lon, name: h.name, dir: 1, txt: `New flashpoint: ${h.name} (${NM[h.layer]})` }));
+}
+log('archive');
+await archiveDay(now, hotspots, layers, Math.round(Object.values(layers).reduce((s, l) => s + l.index, 0) / LAYERS.length));
+await fs.writeFile(new URL('../data/arc.json', import.meta.url), JSON.stringify(await buildArc(now, B, CENT, log)));
+history.push({ t: now.toISOString(), n: counts, spread, fear: fear?.value, idx: Object.fromEntries(Object.entries(layers).map(([k, v]) => [k, v.index])) });
 history = history.filter(h => now - Date.parse(h.t) < 30 * 864e5);
 const composite = Math.round(Object.values(layers).reduce((s, l) => s + l.index, 0) / LAYERS.length);
 
-const out = { updated: now.toISOString(), next: new Date(+now + 4 * 36e5).toISOString(), composite, layers, hotspots, convergence, macro: mkts,
+const out = { updated: now.toISOString(), next: new Date(+now + 4 * 36e5).toISOString(), composite, compositeTier: tier(composite), fear, signal, hard: H, moves: moves.slice(0, 10), layers, hotspots, convergence, macro: mkts,
   feeds: { ics: ics ? { d1: ics.d1, d7: ics.d7, latest: ics.latest.slice(0, 3) } : null, kev: kev ? { d1: kev.d1, d7: kev.d7, latest: kev.latest } : null,
     outages: outages ? outages.countries.slice(0, 12) : null, disasters: disasters ? disasters.slice(0, 12).map(({ title, url, type, level, country }) => ({ title, url, type, level, country })) : null },
   sources };
