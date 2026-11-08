@@ -10,20 +10,30 @@ const now = new Date();
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const sources = {};
 
-async function get(url, { type = 'json', tries = 2, wait = 0 } = {}) {
+async function get(url, { type = 'json', tries = 2, wait = 0, backoff = 6000 } = {}) {
   for (let i = 0; i < tries; i++) {
     try {
       if (wait) await sleep(wait);
-      const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': '*/*' }, signal: AbortSignal.timeout(30000) });
+      const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': '*/*' }, signal: AbortSignal.timeout(25000) });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const t = await r.text();
       return type === 'json' ? JSON.parse(t) : t;
-    } catch (e) { log('  fail', url.slice(0, 90), e.message); if (i < tries - 1) await sleep(6000); }
+    } catch (e) { log('  fail', url.slice(0, 80), e.message); if (i < tries - 1) await sleep(backoff * (i + 1)); }
   }
   return null;
 }
 
 /* ---------------- layers ---------------- */
+const GN = {
+  military: '"airstrike" OR "missile strike" OR "drone strike" OR shelling OR "troop buildup" OR "military drills" OR "naval drills"',
+  maritime: 'tanker OR "container ship" OR "shipping lane" OR "shipping disruption" OR "freight rates" OR "port closure" OR chokepoint',
+  cyber: 'cyberattack OR ransomware OR SCADA OR "industrial control" OR hackers OR "critical infrastructure" cyber',
+  narrative: 'disinformation OR propaganda OR "state media" OR censorship OR "information warfare" OR deepfake',
+  power: '"power outage" OR blackout OR "load shedding" OR "grid failure" OR "power cuts" OR substation',
+  strain: '"food prices" OR famine OR "food insecurity" OR hunger OR "fuel shortage" OR hyperinflation',
+  water: 'drought OR "water shortage" OR aquifer OR "water crisis" OR "water rationing" OR desalination',
+  telecom: '"internet outage" OR "undersea cable" OR "subsea cable" OR "GPS jamming" OR "internet shutdown" OR "cable cut"'
+};
 const LAYERS = [
   { id: 'military',  q: '("airstrike" OR "missile strike" OR "drone strike" OR "shelling" OR "troop buildup" OR "military exercise" OR "naval drills" OR "artillery")' },
   { id: 'maritime',  q: '("shipping lane" OR "tanker" OR "container ship" OR "cargo ship" OR "port closure" OR "shipping disruption" OR "freight rates" OR "chokepoint")' },
@@ -79,17 +89,28 @@ function split24(pts) {
   const cut = now - 864e5, a = pts.filter(p => p.t >= cut), b = pts.filter(p => p.t < cut && p.t >= now - 8 * 864e5);
   return { a, b };
 }
-async function gdeltLayer(L) {
-  const q = encodeURIComponent(L.q + ' sourcelang:english');
-  const vol = parseTL(await get(GD + q + '&mode=timelinevolraw&timespan=8d', { wait: 5500 }));
-  const tone = parseTL(await get(GD + q + '&mode=timelinetone&timespan=8d', { wait: 5500 }));
-  const arts = (await get(GD + q + '&mode=artlist&maxrecords=120&sort=hybridrel&timespan=24h', { wait: 5500 }))?.articles || [];
-  const V = split24(vol), T = split24(tone);
-  const sum = a => a.reduce((s, p) => s + p.v, 0), mean = a => a.length ? sum(a) / a.length : null;
-  const vol24 = sum(V.a), volBase = V.b.length ? sum(V.b) / Math.max(1, (V.b.length ? (V.b[V.b.length - 1].t - V.b[0].t) / 864e5 : 7)) : null;
-  return { vol24, volBase, tone24: mean(T.a), toneBase: mean(T.b), arts, ok: vol.length > 0 };
+const NEG = /\b(kill|killed|dead|deaths|attack|attacks|strike|strikes|war|crisis|collapse|shortage|famine|outage|blackout|threat|warn|warning|surge|soar|explosion|missile|drone|hack|hacked|breach|sanction|emergency|severe|fear|clash|clashes|disrupt|disruption|cut|seized|jamming|shutdown|riot|protest|flee|starv)/gi;
+const POS = /\b(restor|resum|ease|eases|eased|recover|ceasefire|deal|agreement|reopen|reopens|calm|aid|relief|repair|repaired|stabil)/gi;
+const lexTone = arr => { if (!arr.length) return null; let n = 0, p = 0; for (const a of arr) { n += ((a.title || '').match(NEG) || []).length; p += ((a.title || '').match(POS) || []).length; } return +(-((n - p) / arr.length) * 3).toFixed(2); };
+async function googleNews(q, ed = 'US') {
+  const lang = { US: 'en-US', GB: 'en-GB', IN: 'en-IN', AU: 'en-AU', SG: 'en-SG', ZA: 'en-ZA' }[ed] || 'en-US';
+  const x = await get(`https://news.google.com/rss/search?q=${encodeURIComponent('(' + q + ') when:1d')}&hl=${lang}&gl=${ed}&ceid=${ed}:en`, { type: 'text', tries: 2, wait: 1200 });
+  if (!x) return null;
+  return rssItems(x).map(s => { const t = tag(s, 'title'), src = tag(s, 'source'); return { title: src && t.endsWith(' - ' + src) ? t.slice(0, -(src.length + 3)) : t, url: tag(s, 'link'), domain: src, t: Date.parse(tag(s, 'pubDate')) }; })
+    .filter(a => a.t && now - a.t < 864e5);
 }
-
+async function gdeltVol(L) {
+  const q = encodeURIComponent(L.q + ' sourcelang:english');
+  const vol = parseTL(await get(GD + q + '&mode=timelinevolraw&timespan=8d', { wait: 9000, tries: 3, backoff: 20000 }));
+  const V = split24(vol); if (!V.a.length || !V.b.length) return null;
+  const sum = a => a.reduce((s, p) => s + p.v, 0), days = Math.max(1, (V.b[V.b.length - 1].t - V.b[0].t) / 864e5);
+  return { vol24: sum(V.a), volBase: sum(V.b) / days };
+}
+async function gdeltLayer(L) {
+  const arts = (await googleNews(GN[L.id])) || [];
+  const g = await gdeltVol(L);
+  return { vol24: g ? g.vol24 : null, volBase: g ? g.volBase : null, tone24: lexTone(arts), arts, ok: arts.length > 0, gdelt: !!g, n24: arts.length };
+}
 /* ---------------- structured feeds ---------------- */
 const rssItems = xml => [...(xml || '').matchAll(/<item[\s>][\s\S]*?<\/item>/g)].map(m => m[0]);
 const tag = (s, n) => { const m = s.match(new RegExp(`<${n}[^>]*>([\\s\\S]*?)</${n}>`)); return m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, '').trim() : ''; };
@@ -148,15 +169,20 @@ const [ics, kev, outages, disasters, mkts] = [await cisaICS(), await cisaKEV(), 
 sources.cisa_ics = !!ics; sources.cisa_kev = !!kev; sources.ioda = !!outages; sources.gdacs = !!disasters; sources.markets = mkts.some(m => m.last != null);
 log('structured', JSON.stringify(sources));
 
-const layers = {}, hotspots = [];
+const histPath = new URL('../data/history.json', import.meta.url);
+let history = []; try { history = JSON.parse(await fs.readFile(histPath)); } catch {}
+const layers = {}, hotspots = [], counts = {};
 for (const L of LAYERS) {
   log('layer', L.id);
   const g = await gdeltLayer(L);
-  sources['gdelt_' + L.id] = g.ok;
+  sources['news_' + L.id] = g.ok; if (g.gdelt) sources.gdelt = true; else sources.gdelt = sources.gdelt || false;
   // stress index 0–100: coverage surge vs 7-day baseline + negativity of tone + structured signal
-  const ratio = g.volBase ? g.vol24 / g.volBase : 1;
+  const pastN = history.slice(-42).map(h => h.n && h.n[L.id]).filter(v => v != null);
+  const baseN = pastN.length ? pastN.reduce((a, b) => a + b, 0) / pastN.length : null;
+  const ratio = g.volBase ? g.vol24 / g.volBase : baseN ? g.n24 / Math.max(1, baseN) : 1;
+  counts[L.id] = g.n24;
   const surge = clamp((ratio - .6) / 1.4, 0, 1);
-  const neg = g.tone24 != null ? clamp((-g.tone24 - 1) / 6, 0, 1) : .5;
+  const neg = g.tone24 != null ? clamp((-g.tone24) / 4, 0, 1) : .5;
   let struct = 0, note = '';
   if (L.id === 'cyber' && (ics || kev)) { struct = clamp(((ics?.d7 || 0) + 2 * (kev?.d7 || 0)) / 40, 0, 1); note = `${ics?.d7 ?? '—'} ICS advisories · ${kev?.d7 ?? '—'} exploited CVEs added (7d)`; }
   if ((L.id === 'telecom' || L.id === 'power') && outages) { struct = clamp(outages.countries.length / 25, 0, 1); note = `${outages.countries.length} countries with internet outage signals (24h)`; }
@@ -174,7 +200,7 @@ for (const L of LAYERS) {
   const spots = Object.values(byPlace).sort((a, b) => b.n - a.n).slice(0, 14);
   const top = spots[0]?.n || 1;
   spots.forEach(s => { s.intensity = +(s.n / top).toFixed(2); hotspots.push(s); });
-  layers[L.id] = { index, volume24: g.vol24, volumeBase: g.volBase ? Math.round(g.volBase) : null, surgePct: g.volBase ? Math.round((ratio - 1) * 100) : null,
+  layers[L.id] = { index, volume24: g.vol24 ?? g.n24, volumeBase: g.volBase ? Math.round(g.volBase) : baseN ? Math.round(baseN) : null, surgePct: (g.volBase || baseN) ? Math.round((ratio - 1) * 100) : null,
     tone24: g.tone24 != null ? +g.tone24.toFixed(2) : null, toneBase: g.toneBase != null ? +g.toneBase.toFixed(2) : null, note, articles: g.arts.length };
 }
 // structured hotspots
@@ -186,9 +212,10 @@ if (ics) ics.latest.slice(0, 3).forEach(i => hotspots.push({ name: 'ICS advisory
 const BLOCS = [['US', 'unitedstates'], ['UK', 'unitedkingdom'], ['Russia', 'russia'], ['China', 'china'], ['India', 'india'], ['Qatar', 'qatar']];
 const div = [];
 for (const [label, sc] of BLOCS) {
-  const j = await get(GD + encodeURIComponent(LAYERS[0].q + ' sourcecountry:' + sc) + '&mode=timelinetone&timespan=24h', { wait: 5500 });
+  const j = sources.gdelt ? await get(GD + encodeURIComponent(LAYERS[0].q + ' sourcecountry:' + sc) + '&mode=timelinetone&timespan=24h', { wait: 9000, tries: 2, backoff: 15000 }) : null;
   const pts = parseTL(j); if (pts.length) div.push({ bloc: label, tone: +(pts.reduce((s, p) => s + p.v, 0) / pts.length).toFixed(2) });
 }
+if (div.length < 2) { div.length = 0; for (const ed of ['US', 'GB', 'IN', 'AU', 'SG', 'ZA']) { const a = await googleNews(GN.military, ed); const t = a && lexTone(a); if (t != null) div.push({ bloc: ed === 'GB' ? 'UK' : ed, tone: t }); } }
 if (div.length >= 2) {
   const tones = div.map(d => d.tone), spread = Math.max(...tones) - Math.min(...tones);
   const n = layers.narrative; n.divergence = { spread: +spread.toFixed(2), blocs: div };
@@ -203,15 +230,13 @@ const convergence = Object.values(byRegion).map(r => ({ ...r, count: Object.keys
   .sort((a, b) => b.count - a.count || b.n - a.n).slice(0, 10);
 
 // history + deltas
-const histPath = new URL('../data/history.json', import.meta.url);
-let history = []; try { history = JSON.parse(await fs.readFile(histPath)); } catch {}
 const ref = [...history].reverse().find(h => now - Date.parse(h.t) >= 20 * 36e5) || history[0];
 for (const [id, L] of Object.entries(layers)) {
   const prev = ref?.idx?.[id];
   L.delta = prev != null ? L.index - prev : null;
   L.trend = L.delta == null ? 'NEW' : L.delta >= 3 ? 'WORSE' : L.delta <= -3 ? 'BETTER' : 'STEADY';
 }
-history.push({ t: now.toISOString(), idx: Object.fromEntries(Object.entries(layers).map(([k, v]) => [k, v.index])) });
+history.push({ t: now.toISOString(), n: counts, idx: Object.fromEntries(Object.entries(layers).map(([k, v]) => [k, v.index])) });
 history = history.filter(h => now - Date.parse(h.t) < 30 * 864e5);
 const composite = Math.round(Object.values(layers).reduce((s, l) => s + l.index, 0) / LAYERS.length);
 

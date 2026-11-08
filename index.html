@@ -141,7 +141,7 @@ footer b{color:#c9ccd0}
  </section>
 </div>
 <footer>
- <div><b>GLOBAL ATLAS</b> aggregates open-source signals (GDELT news events, CISA ICS advisories & KEV catalog, IODA internet outage detection, GDACS alerts, public market data) and scores them automatically every 4 hours. These are <b>indicators, not intelligence</b>: unverified, automated and headline-driven. Always check the linked sources.</div>
+ <div><b>GLOBAL ATLAS</b> aggregates open-source signals (news headlines via Google News, GDELT event volume, CISA ICS advisories & KEV catalog, IODA internet outage detection, GDACS alerts, public market data) and scores them automatically every 4 hours. These are <b>indicators, not intelligence</b>: unverified, automated and headline-driven. Always check the linked sources.</div>
  <div>© Matthews Operations Lab · Map outlines public domain</div>
 </footer>
 <script>
@@ -196,7 +196,7 @@ function render(){status();$('#empty').style.display=D?'none':'flex';
  // feed
  feed();
  // sources
- const S=D&&D.sources||{},names={cisa_ics:'CISA ICS',cisa_kev:'CISA KEV',ioda:'IODA',gdacs:'GDACS',markets:'Markets'};LAY.forEach(l=>names['gdelt_'+l.id]='GDELT·'+l.id);
+ const S=D&&D.sources||{},names={cisa_ics:'CISA ICS',cisa_kev:'CISA KEV',ioda:'IODA outages',gdacs:'GDACS',markets:'Markets',gdelt:'GDELT volume'};LAY.forEach(l=>{names['gdelt_'+l.id]='GDELT·'+l.s;names['news_'+l.id]='News·'+l.s});
  const ks=Object.keys(S);$('#src').innerHTML=ks.map(k=>`<span class="${S[k]?'ok':'no'}">${names[k]||k}</span>`).join('')||'<span>awaiting first pull</span>';$('#srcn').textContent=ks.length?ks.filter(k=>S[k]).length+'/'+ks.length+' ONLINE':'';
  // layer label
  const L=LAY.find(l=>l.id===sel);$('#layt').textContent=L?L.n.toUpperCase():'ALL LAYERS';$('#laysw').style.background=L?COL[L.id]:'#000';
