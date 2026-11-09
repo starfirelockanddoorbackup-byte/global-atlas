@@ -3,7 +3,7 @@
 // and writes data/latest.json + data/history.json for the static site.
 import fs from 'node:fs/promises';
 import { marketHistory, liveMarkets, lawWeekly, rawSeries, calibrate, tierBy, pct } from './calib.mjs';
-import { backfill, archiveDay, buildArc, law, hardSignals, narrativeHard, moneySignal, scoreLayer, signalCheck, fearGauge, tier } from './extra.mjs';
+import { backfill, archiveDay, buildArc, law, hardSignals, narrativeHard, ucdpHard, moneySignal, scoreLayer, signalCheck, fearGauge, tier } from './extra.mjs';
 
 const UA = 'GlobalAtlas/1.0 (+https://github.com/starfirelockanddoorbackup-byte/global-atlas)';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -161,9 +161,13 @@ const histPath = new URL('../data/history.json', import.meta.url);
 let history = []; try { history = JSON.parse(await fs.readFile(histPath)); } catch {}
 log('backfill + law');
 const B = await backfill(get, log, now);
+// UCDP conflict data: committed file rebuilt by hand from UCDP downloads (scripts/build_ucdp.py)
+try { B.ucdp = JSON.parse(await fs.readFile(new URL('../data/ucdp.json', import.meta.url))); } catch { B.ucdp = null; }
+sources.ucdp = !!B.ucdp;
 sources.portwatch = !!B.portwatch; sources.dshield = !!B.dshield2; sources.gdacs_archive = !!B.gdacs; sources.ioda_history = !!B.ioda;
 const LAW = await law(get, now); sources.federal_register = Object.values(LAW).some(l => l.latest.length);
 const H = hardSignals(B, now, { outageEvents: outages ? outages.events : null });
+const UH = ucdpHard(B.ucdp); if (UH) H.military = UH;
 const money = {}; for (const L of LAYERS) money[L.id] = moneySignal(L.id, mkts);
 // calibration: every hard component as a percentile of its own ~3-year history; tiers from a replay of the past year
 log('calibrate');
@@ -196,9 +200,12 @@ for (const L of LAYERS) {
   if (L.id === 'water' && disasters) { const dr = disasters.filter(d => /DR|FL/.test(d.type)); struct = clamp(dr.length / 12, 0, 1); note = `${dr.length} active drought/flood alerts`; }
   if (L.id === 'cyber' && H.cyber) struct = Math.max(struct, H.cyber.v01);
   if (L.id === 'maritime' && H.maritime) { struct = H.maritime.v01; note = H.maritime.txt; }
+  // military data = percentile of the latest quarter's battle deaths across UCDP's whole record (1989-), not the 3y window:
+  // 2023-26 is the deadliest stretch in decades, so a 3y percentile would score any month as calm
+  if (L.id === 'military' && H.military) { struct = H.military.v01; note = H.military.txt; }
   if (L.id === 'strain' && money.strain) note = money.strain.txt;
   if (L.id === 'water' && H.water) note = H.water.txt;
-  const hasData = ['cyber', 'telecom', 'power', 'water', 'maritime'].includes(L.id) && (struct || H[L.id]);
+  const hasData = ['cyber', 'telecom', 'power', 'water', 'maritime', 'military'].includes(L.id) && (struct || H[L.id]);
   // data: percentile of history where we have it (maritime, cyber, water, power-cyclones); live ratios otherwise
   let data = hasData ? struct : null; const cd = CAL.parts[L.id]?.data;
   if (cd != null) data = L.id === 'power' ? Math.max(cd, H.power?.v01 ?? 0) : cd;

@@ -143,9 +143,15 @@ export async function buildArc(now, B, CENT, log) {
     for (const [y, cs] of Object.entries(B.ioda)) for (const [name, n] of Object.entries(cs)) { if (n < Math.max(10, p75) || !CENT[name]) continue;
       const lv = clamp(Math.ceil(n / p90 * 9), 1, 9), z = zone(name, 'telecom', CENT[name][0], CENT[name][1]); z.src.add('ioda');
       months.forEach((m, i) => { if (m.startsWith(y + '-')) z.m[i] = Math.max(z.m[i], lv); }); } }
+  // 5) UCDP: organized-violence deaths per country per month (final GED + preliminary candidate months)
+  if (B.ucdp) { const U = B.ucdp, thru = mi[U.through];
+    for (const u of U.zones) { const k = u.name + '|military', z = Z[k] || zone(u.name, 'military', u.lat, u.lon); let hit = false;
+      for (const [m, lv] of Object.entries(u.lv)) if (mi[m] != null) { z.m[mi[m]] = Math.max(z.m[mi[m]], lv); hit = true; }
+      if (!hit) continue; z.src.add('ucdp');
+      info[k] = { kind: 'ucdp', deaths: u.m[U.through] ?? 0, month: U.through, top: u.top, prelim: (U.preliminary_months || []).includes(U.through), thru }; } }
   const enc = a => Array.from(a, v => v).join('');
   const zones = Object.entries(Z).filter(([, z]) => z.m.some(v => v)).map(([k, z]) => ({ name: z.name, layer: z.layer, lat: +(+z.lat).toFixed(2), lon: +(+z.lon).toFixed(2), src: [...z.src], d: enc(z.d), m: enc(z.m), info: info[k] }));
-  const cover = { archive: first, portwatch: B.portwatch ? ARC_FROM : null, gdacs: B.gdacs ? ARC_FROM : null, ioda: B.ioda ? ARC_FROM : null };
+  const cover = { archive: first, portwatch: B.portwatch ? ARC_FROM : null, gdacs: B.gdacs ? ARC_FROM : null, ioda: B.ioda ? ARC_FROM : null, ucdp: B.ucdp ? ARC_FROM : null, ucdp_through: B.ucdp?.through || null };
   log('  arc zones', zones.length);
   return { updated: now.toISOString(), dayStart: iso(d0), days: ARC_DAYS, months, cover, zones };
 }
@@ -229,6 +235,22 @@ export function hardSignals(B, now, cur) {
   if (B.gdacs) { const active = t => B.gdacs.filter(e => /DR|FL/.test(e.type || 'DR') && e.from <= t && (e.to || +now) >= t - 10 * DAY).length, nowN = active(+now), yr = []; for (let i = 7; i < 365; i += 7) yr.push(active(+now - i * DAY));
     const m = mean(yr); H.water = { v: nowN, ref: +m.toFixed(1), dir: nowN >= m * 1.3 + .5 ? 1 : nowN <= m * .7 - .5 ? -1 : 0, v01: clamp(nowN / Math.max(1, m * 2), 0, 1), txt: `${nowN} Orange/Red drought & flood alerts active vs ${m.toFixed(1)} avg over the past year`, src: 'GDACS' }; }
   return H;
+}
+/* UCDP measured-data signal for the military layer: latest 3 months of state-based battle deaths
+   vs the same 3 months a year earlier (direction) and vs every 3-month window since 1989 (level) */
+export function ucdpHard(U) {
+  if (!U || !U.sb_deaths || U.sb_deaths.length < 27) return null;
+  const s = U.sb_deaths, n = s.length, q = i => s[i - 2] + s[i - 1] + s[i];
+  const cur = q(n - 1), prev = q(n - 13), all = []; for (let i = 2; i < n; i++) all.push(q(i));
+  const p = all.filter(v => v <= cur).length / all.length, r = cur / Math.max(1, prev);
+  const mon = i => { const [y, m] = U.months_from.split('-').map(Number), d = new Date(Date.UTC(y, m - 1 + i, 1)); return d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' }) + (i === n - 1 ? ' ' + d.getUTCFullYear() : ''); };
+  const A = U.annual[U.annual.length - 1], rec = U.annual.every(a => a[1] <= A[1]), Y = U.ytd;
+  const pre = (U.preliminary_months || []).includes(U.through);
+  const txt = `Battle deaths ${mon(n - 3)}–${mon(n - 1)}: ${cur.toLocaleString()} vs ${prev.toLocaleString()} a year earlier (${r >= 1 ? '+' : ''}${Math.round((r - 1) * 100)}%) · higher than ${Math.round(p * 100)}% of quarters since 1989`
+    + ` · ${A[1]} armed conflicts in ${A[0]}${rec ? ' (most since 1946)' : ''}`
+    + (Y ? ` · ${Y.year} so far: ${Y.conflicts}${Y.unassigned ? '–' + (Y.conflicts + Y.unassigned) : ''} (${Y.prev.conflicts} by this point in ${Y.prev.year})` : '')
+    + (pre ? ' · preliminary' : '');
+  return { v: cur, ref: prev, dir: r >= 1.25 ? 1 : r <= .8 ? -1 : 0, v01: +p.toFixed(3), txt, src: 'UCDP', spark: s.slice(-36), through: U.through };
 }
 export function narrativeHard(history, spread) {
   if (spread == null) return null; const sp = history.map(h => h.spread).filter(v => v != null), v01 = clamp(spread / 2.5, 0, 1);
